@@ -1177,6 +1177,7 @@ module core_top (
       .video_r(video_rgb_snes[23:16]),
       .video_g(video_rgb_snes[15:8]),
       .video_b(video_rgb_snes[7:0]),
+      .high_res(high_res_snes),
 
       // Audio
       .audio_l(audio_l),
@@ -1190,11 +1191,15 @@ module core_top (
   wire video_hs_snes;
   wire video_vs_snes;
   wire [23:0] video_rgb_snes;
+  wire high_res_snes;
+  wire high_res_v;
+  synch_3 #(.WIDTH(1)) high_res_sync (high_res_snes, high_res_v, clk_video_5_37);
 
   assign video_rgb_clock = clk_video_5_37;
   assign video_rgb_clock_90 = clk_video_5_37_90deg;
   assign video_rgb = rgb;
   assign video_de = de;
+  assign video_skip = vskip;
 
   reg de;
   reg [23:0] rgb;
@@ -1228,24 +1233,38 @@ module core_top (
   reg prev_de;
   reg prev_vs;
   reg [7:0] latched_snap_index;
+  reg latched_high_res;
+  reg vskip;
+  reg skip_phase;
 
   always @(posedge clk_video_5_37) begin
     prev_de <= de_out;
     prev_vs <= video_vs;
 
-    de <= 0;
+    de    <= 0;
+    vskip <= 0;
 
     if (video_vs && ~prev_vs) begin
       latched_snap_index <= snap_index;
+      latched_high_res   <= high_res_v;
     end
 
     if (~de_out && prev_de) begin
-      // Write video slot
-      rgb <= {9'b0, ~latched_snap_index[0], use_square_pixels_s, 10'b0, 3'b0};
+      // Scaler-slot command. bit15 = low-res (slots 4-7 = 256 wide), so a 256px
+      // game's screenshot is saved native instead of doubled to 512.
+      rgb <= {8'b0, ~latched_high_res, ~latched_snap_index[0], use_square_pixels_s, 10'b0, 3'b0};
     end else if (de_out) begin
       de  <= 1;
       rgb <= rgb_out;
+      // Low-res is pixel-doubled to 512; skip every 2nd pixel so the scaler
+      // stores 256. The pairs are identical, so the phase doesn't matter.
+      if (~latched_high_res) begin
+        skip_phase <= ~skip_phase;
+        vskip      <= skip_phase;
+      end
     end
+
+    if (~de_out) skip_phase <= 0;
   end
 
   sound_i2s #(

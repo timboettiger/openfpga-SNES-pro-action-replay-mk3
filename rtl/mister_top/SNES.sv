@@ -167,6 +167,7 @@ module MAIN_SNES (
     output wire hblank,
     output wire vsync,
     output wire hsync,
+    output wire high_res,
 
     output wire [7:0] video_r,
     output wire [7:0] video_g,
@@ -435,7 +436,7 @@ module MAIN_SNES (
 
       // .FIELD(FIELD), // TODO
       // .INTERLACE(INTERLACE),
-      // .HIGH_RES(HIGH_RES),
+      .HIGH_RES(high_res),
       .DOTCLK(dotclk),
 
       .HBLANKn(hblank_n),
