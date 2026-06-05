@@ -10,16 +10,10 @@ trainer, and live cheat application.
 
 ### This core adds
 
-- **Pro Action Replay MK3:** boots into the MK3 BIOS (the Pro Action Replay UI)
-  for cheat-code entry, trainer, and live cheat application. A pause-menu action
-  returns to the BIOS from a running game, the Cheats / Trainer option toggles
-  cheats (also live in-game), and the cheat list is saved to the SD card and
-  restored on the next launch.
-- **Cartridge LEDs:** an on-screen recreation of the cartridge's front-panel
-  LEDs, placeable in any corner or hidden.
-- **Mouse on the Analogue Dock:** a USB mouse acts as the SNES Mouse, on SNES
-  port 1 or 2 (Mouse Port), in games and in the BIOS. Without one, the D-Pad or
-  left analog stick emulates it.
+- **Pro Action Replay MK3:** boots into the Pro Action Replay UI to manage cheats and trainer functionality.
+- **Cheat List:** saved to the SD card and restored on the next launch.
+- **Cartridge LEDs:** OSD of the cartridge's front-panel LEDs, placeable in any corner or hidden.
+- **Mouse on Analogue Dock:** an USB mouse acts as the SNES Mouse, on SNES port 1 or 2 (Mouse Port). Without one, the D-Pad or left analog stick emulates it as intended by agg.
 
 ### Inherited from agg23's SNES core
 
