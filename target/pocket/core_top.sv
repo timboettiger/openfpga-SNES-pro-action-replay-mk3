@@ -209,10 +209,10 @@ module core_top (
     //   [ 7: 0] ltrig
     //   [15: 8] rtrig
     //
-    input wire [15:0] cont1_key,
-    input wire [15:0] cont2_key,
-    input wire [15:0] cont3_key,
-    input wire [15:0] cont4_key,
+    input wire [31:0] cont1_key,
+    input wire [31:0] cont2_key,
+    input wire [31:0] cont3_key,
+    input wire [31:0] cont4_key,
     input wire [31:0] cont1_joy,
     input wire [31:0] cont2_joy,
     input wire [31:0] cont3_joy,
@@ -321,10 +321,26 @@ module core_top (
       32'hF8xxxxxx: begin
         bridge_rd_data <= cmd_bridge_rd_data;
       end
+      // PAR MK3 LED status read-back. Low 2 bits = {right LED, left LED},
+      // driven by the MK3 BIOS via the IO register at $00:6000.
+      32'h308: begin
+        bridge_rd_data <= {30'b0, mk3_leds_sync1};
+      end
+      // PAR MK3 "Cheats aktiv" read-back for the menu's Cheats & Trainer check.
+      // Reflects the live mapper mode, not the last written value. 1 = active.
+      32'h300: begin
+        bridge_rd_data <= {31'b0, (mk3_eff_mode_s1 == 2'd1)};
+      end
     endcase
 
     if (bridge_addr[31:28] == 4'h2) begin
       bridge_rd_data <= sd_read_data;
+    end
+
+    // PAR MK3 second save channel for the 32 KB cheat SRAM (slot 11, addr
+    // 0x40000000). Byte-wide; separate from the cart save at 0x2xxxxxxx.
+    if (bridge_addr[31:28] == 4'h4) begin
+      bridge_rd_data <= mk3sv_read_data;
     end
   end
 
@@ -373,13 +389,45 @@ module core_top (
         32'h0000010C: begin
           joystick_deadzone <= bridge_wr_data[7:0];
         end
+        32'h110: begin
+          mk3_mouse_port <= bridge_wr_data[0];
+        end
         32'h200: begin
           use_square_pixels <= bridge_wr_data[0];
         end
         32'h204: begin
           blend_enabled <= bridge_wr_data[0];
         end
+        // PAR MK3 SNES (interact.json addresses 0x300, 0x304).
+        32'h300: begin
+          mk3_switch_pos <= bridge_wr_data[1:0];
+        end
+        32'h304: begin
+          // MK3 Soft Reset is an interact.json action: it writes 1 with no
+          // following 0, so latching it as a level would hold reset forever.
+          // Arm a one-shot, self-cleared next cycle; main.v stretches the pulse
+          // into a reset window. MK3 SRAM (cheat list) is not cleared by reset.
+          mk3_soft_reset_req <= 1'b1;
+        end
+        32'h30C: begin
+          // PAR MK3 LED overlay POSITION (interact.json "Cartridge LED" list):
+          // 0 = HIDE, 1..9 = 3x3 grid (TL TM TR / ML CENTER MR / BL BM BR).
+          mk3_led_pos <= bridge_wr_data[3:0];
+        end
+        32'h310: begin
+          // PAR MK3 "Pro Action Replay" action (interact.json id 203). Flips a
+          // level bit; mk3_snes_top edge-detects it into a 1-cycle par_menu
+          // pulse that forces the FSM to MK3 Menu. Works regardless of the
+          // Cheats/Trainer toggle at $300.
+          mk3_par_toggle <= ~mk3_par_toggle;
+        end
       endcase
+    end
+
+    // Self-clear the soft-reset one-shot: high for one cycle after the write,
+    // then drops. Without this it would stay 1 until the next $304 write.
+    if (mk3_soft_reset_req && !(bridge_wr && bridge_addr == 32'h304)) begin
+      mk3_soft_reset_req <= 1'b0;
     end
   end
 
@@ -547,6 +595,30 @@ module core_top (
       .write_data(ioctl_dout)
   );
 
+  // PAR MK3 BIOS asset loader (data.json slot 100, addr 0x30000000).
+  // Byte-wide: one BIOS byte per write.
+  wire        mk3_bios_we;
+  wire [16:0] mk3_bios_load_addr;
+  wire [7:0]  mk3_bios_load_din;
+  data_loader #(
+      .ADDRESS_MASK_UPPER_4(4'h3),
+      .ADDRESS_SIZE(17),
+      .WRITE_MEM_CLOCK_DELAY(7),
+      .OUTPUT_WORD_SIZE(1)
+  ) mk3_bios_loader (
+      .clk_74a(clk_74a),
+      .clk_memory(clk_sys_21_48),
+
+      .bridge_wr(bridge_wr),
+      .bridge_endian_little(bridge_endian_little),
+      .bridge_addr(bridge_addr),
+      .bridge_wr_data(bridge_wr_data),
+
+      .write_en  (mk3_bios_we),
+      .write_addr(mk3_bios_load_addr),
+      .write_data(mk3_bios_load_din)
+  );
+
   data_loader #(
       .ADDRESS_MASK_UPPER_4(4'h2),
       .ADDRESS_SIZE(17),
@@ -599,18 +671,91 @@ module core_top (
       .read_data(sd_buff_din)
   );
 
+  // ==========================================================================
+  // PAR MK3 second save channel for the 32 KB cheat SRAM.
+  //
+  // Clone of the cart-save channel above (slot 10 at 0x2xxxxxxx), retargeted at
+  // slot 11 / addr 0x40000000. Independent: the MK3 SRAM is its own dual-port
+  // block (work.dpram port B), so it never touches the cart BSRAM or the SNES
+  // cheat-write path (port A).
+  //
+  // The MK3 SRAM is byte-wide and 32 KB (15-bit address), so this uses byte
+  // mode (OUTPUT/INPUT_WORD_SIZE = 1) like the BIOS loader: addresses are byte
+  // addresses (no halving) and the 8-bit buses wire straight to mk3_sram port B.
+  // ==========================================================================
+  wire        mk3sv_wr;            // loader write strobe  (1 = restoring SRAM)
+  wire [16:0] mk3sv_addr_in;       // loader byte address  (only [14:0] used)
+  wire [7:0]  mk3sv_dout;          // loader byte to write into SRAM
+
+  data_loader #(
+      .ADDRESS_MASK_UPPER_4(4'h4),
+      .ADDRESS_SIZE(17),
+      .WRITE_MEM_CLOCK_DELAY(7),
+      .OUTPUT_WORD_SIZE(1)
+  ) mk3_save_data_loader (
+      .clk_74a(clk_74a),
+      .clk_memory(clk_sys_21_48),
+
+      .bridge_wr(bridge_wr),
+      .bridge_endian_little(bridge_endian_little),
+      .bridge_addr(bridge_addr),
+      .bridge_wr_data(bridge_wr_data),
+
+      .write_en  (mk3sv_wr),
+      .write_addr(mk3sv_addr_in),
+      .write_data(mk3sv_dout)
+  );
+
+  wire [31:0] mk3sv_read_data;     // routed to bridge_rd_data for addr 0x4xxxxxxx
+
+  wire        mk3sv_rd;            // unloader read strobe (1 = saving SRAM)
+  wire [16:0] mk3sv_addr_out;      // unloader byte address (only [14:0] used)
+  wire [7:0]  mk3sv_din;           // SRAM byte returned to the unloader
+
+  data_unloader #(
+      .ADDRESS_MASK_UPPER_4(4'h4),
+      .ADDRESS_SIZE(17),
+      .READ_MEM_CLOCK_DELAY(7),
+      .INPUT_WORD_SIZE(1)
+  ) mk3_save_data_unloader (
+      .clk_74a(clk_74a),
+      .clk_memory(clk_sys_21_48),
+
+      .bridge_rd(bridge_rd),
+      .bridge_endian_little(bridge_endian_little),
+      .bridge_addr(bridge_addr),
+      .bridge_rd_data(mk3sv_read_data),
+
+      .read_en  (mk3sv_rd),
+      .read_addr(mk3sv_addr_out),
+      .read_data(mk3sv_din)
+  );
+
+  // The datatable tells the Pocket each data slot's size; the framework only
+  // writes a slot to disk if its datatable size is non-zero. We publish two
+  // sizes by alternating phases:
+  //   slot 10 "Save" (index 1, size addr 3): dynamic cart SRAM size (sram_size)
+  //   slot 11 "MK3 Cheats" (index 2, size addr 5): fixed 32 KB. Without this
+  //   write the Pocket saw size 0 and never created the .mk3sav file.
+  reg dt_phase = 1'b0;
   always @(posedge clk_74a or negedge pll_core_locked) begin
     if (~pll_core_locked) begin
       datatable_addr <= 0;
       datatable_data <= 0;
       datatable_wren <= 0;
+      dt_phase       <= 1'b0;
     end else begin
-      // Write sram size half of the time
       datatable_wren <= 1;
-      // sram_size is the size of the config value in the ROM. Convert to actual size
-      datatable_data <= sram_size ? 32'd1024 << sram_size : 32'h0;
-      // Data slot index 1, not id 1
-      datatable_addr <= 1 * 2 + 1;
+      dt_phase       <= ~dt_phase;
+      if (~dt_phase) begin
+        // slot 10 (cart save): actual size from ROM config (1024 << sram_size)
+        datatable_data <= sram_size ? 32'd1024 << sram_size : 32'h0;
+        datatable_addr <= 1 * 2 + 1;   // = 3
+      end else begin
+        // slot 11 (MK3 cheat SRAM): fixed 32 KB
+        datatable_data <= 32'h0000_8000;
+        datatable_addr <= 2 * 2 + 1;   // = 5
+      end
     end
   end
 
@@ -619,11 +764,18 @@ module core_top (
 
   wire [3:0] sram_size;
 
-  wire [15:0] cont1_key_s;
-  wire [15:0] cont2_key_s;
-  wire [15:0] cont3_key_s;
-  wire [15:0] cont4_key_s;
+  wire [31:0] cont1_key_s;
+  wire [31:0] cont2_key_s;
+  wire [31:0] cont3_key_s;
+  wire [31:0] cont4_key_s;
   wire [31:0] cont1_joy_s;
+  wire [31:0] cont2_joy_s;
+  wire [31:0] cont3_joy_s;
+  wire [31:0] cont4_joy_s;
+  wire [15:0] cont1_trig_s;
+  wire [15:0] cont2_trig_s;
+  wire [15:0] cont3_trig_s;
+  wire [15:0] cont4_trig_s;
 
   wire [15:0] cont1_joy_x = cont1_joy_s[7:0];
   wire [15:0] cont1_joy_y = cont1_joy_s[15:8];
@@ -673,6 +825,41 @@ module core_top (
       clk_sys_21_48
   );
 
+  synch_3 #(
+      .WIDTH(32)
+  ) joy4_s (
+      cont4_joy,
+      cont4_joy_s,
+      clk_sys_21_48
+  );
+
+  synch_3 #(
+      .WIDTH(16)
+  ) trig4_s (
+      cont4_trig,
+      cont4_trig_s,
+      clk_sys_21_48
+  );
+
+  synch_3 #(.WIDTH(32)) joy2_s  (cont2_joy,  cont2_joy_s,  clk_sys_21_48);
+  synch_3 #(.WIDTH(32)) joy3_s  (cont3_joy,  cont3_joy_s,  clk_sys_21_48);
+  synch_3 #(.WIDTH(16)) trig1_s (cont1_trig, cont1_trig_s, clk_sys_21_48);
+  synch_3 #(.WIDTH(16)) trig2_s (cont2_trig, cont2_trig_s, clk_sys_21_48);
+  synch_3 #(.WIDTH(16)) trig3_s (cont3_trig, cont3_trig_s, clk_sys_21_48);
+
+  // Real USB mouse: detect on any Pocket slot (Analogue default is slot 4).
+  // The chosen SNES port and the game-running gate are applied below.
+  wire mk3_m1 = (cont1_key_s[31:28] == 4'h5);
+  wire mk3_m2 = (cont2_key_s[31:28] == 4'h5);
+  wire mk3_m3 = (cont3_key_s[31:28] == 4'h5);
+  wire mk3_m4 = (cont4_key_s[31:28] == 4'h5);
+  wire mk3_mouse_any = mk3_m1 | mk3_m2 | mk3_m3 | mk3_m4;
+
+  // Pick the slot holding the mouse (default-4 priority, then 1, 2, 3).
+  wire [31:0] mk3_msel_key  = mk3_m4 ? cont4_key_s  : mk3_m1 ? cont1_key_s  : mk3_m2 ? cont2_key_s  : cont3_key_s;
+  wire [31:0] mk3_msel_joy  = mk3_m4 ? cont4_joy_s  : mk3_m1 ? cont1_joy_s  : mk3_m2 ? cont2_joy_s  : cont3_joy_s;
+  wire [15:0] mk3_msel_trig = mk3_m4 ? cont4_trig_s : mk3_m1 ? cont1_trig_s : mk3_m2 ? cont2_trig_s : cont3_trig_s;
+
   // Settings
   reg [31:0] reset_delay = 0;
   wire reset_button = reset_delay > 0;
@@ -686,9 +873,34 @@ module core_top (
   reg [7:0] dpad_aim_speed = 0;
   reg [7:0] joystick_deadzone;
   reg mouse_enabled;
+  reg mk3_mouse_port = 1'b0;  // Mouse Port setting: 0 = SNES port 1, 1 = SNES port 2
 
   reg use_square_pixels = 0;
   reg blend_enabled = 0;
+
+  // PAR MK3 SNES interaction vars (bridge addrs 0x300/0x304), captured in
+  // clk_74a and synced to clk_sys_21_48 below via synch_3.
+  reg [1:0] mk3_switch_pos     = 2'd2;  // default: MK3 Menu
+  reg       mk3_soft_reset_req = 1'b0;
+  reg [3:0] mk3_led_pos = 4'd9;        // default: bottom-right (BR); 0 = hidden
+  reg       mk3_par_toggle = 1'b0;     // flips on each "Pro Action Replay" ($310) action
+
+  // PAR MK3 LED status (driven by mk3_snes_top in clk_sys). Crossed back to
+  // clk_74a via a 2-FF sync and exposed at bridge addr 0x308 (2 LSBs).
+  wire [1:0] mk3_leds_from_core;
+  reg  [1:0] mk3_leds_sync0;
+  reg  [1:0] mk3_leds_sync1;
+  // Live mapper mode (effective_mode), synced clk_sys to clk_74a so the menu
+  // can read back the "Cheats aktiv" state (bridge $300).
+  wire [1:0] mk3_eff_mode_core;
+  reg  [1:0] mk3_eff_mode_s0;
+  reg  [1:0] mk3_eff_mode_s1;
+  always @(posedge clk_74a) begin
+    mk3_leds_sync0 <= mk3_leds_from_core;
+    mk3_leds_sync1 <= mk3_leds_sync0;
+    mk3_eff_mode_s0 <= mk3_eff_mode_core;
+    mk3_eff_mode_s1 <= mk3_eff_mode_s0;
+  end
 
   // Settings sync
   wire reset_button_s;
@@ -706,8 +918,15 @@ module core_top (
   wire use_square_pixels_s;
   wire blend_enabled_s;
 
+  // PAR MK3 cross-domain synchronized signals (clk_74a to clk_sys_21_48)
+  wire [1:0] mk3_switch_pos_s;
+  wire       mk3_soft_reset_req_s;
+  wire       mk3_game_loaded_s;   // = dataslot_allcomplete sync'd into clk_sys
+  wire [3:0] mk3_led_pos_s;
+  wire       mk3_par_toggle_s;
+
   synch_3 #(
-      .WIDTH(25)
+      .WIDTH(34)   // 28 base + mk3_game_loaded(1) + mk3_led_pos(4) + mk3_par_toggle(1)
   ) settings_s (
       {
         reset_button,
@@ -720,7 +939,12 @@ module core_top (
         joystick_deadzone,
         mouse_enabled,
         use_square_pixels,
-        blend_enabled
+        blend_enabled,
+        mk3_switch_pos,
+        mk3_soft_reset_req,
+        dataslot_allcomplete,
+        mk3_led_pos,
+        mk3_par_toggle
       },
       {
         reset_button_s,
@@ -733,10 +957,31 @@ module core_top (
         joystick_deadzone_s,
         mouse_enabled_s,
         use_square_pixels_s,
-        blend_enabled_s
+        blend_enabled_s,
+        mk3_switch_pos_s,
+        mk3_soft_reset_req_s,
+        mk3_game_loaded_s,
+        mk3_led_pos_s,
+        mk3_par_toggle_s
       },
       clk_sys_21_48
   );
+
+  // Mouse Port setting (0 = SNES port 1, 1 = SNES port 2), synced to clk_sys.
+  wire mk3_mouse_port_s;
+  synch_3 #(.WIDTH(1)) mouseport_s (mk3_mouse_port, mk3_mouse_port_s, clk_sys_21_48);
+
+  // Real USB mouse, packed for ioport. Active whenever a mouse is present; the
+  // pad is routed to the other SNES port in SNES.sv so both reach the console.
+  // [49] right [48] left [47:32] counter [31:16] dy [15:0] dx (LE byte-swapped).
+  wire [50:0] mk3_mouse = {
+      mk3_mouse_any,
+      mk3_msel_joy[17],
+      mk3_msel_joy[16],
+      {mk3_msel_key[7:0],  mk3_msel_key[15:8]},
+      {mk3_msel_trig[7:0], mk3_msel_trig[15:8]},
+      {mk3_msel_joy[7:0],  mk3_msel_joy[15:8]}
+  };
 
   reg new_rtc = 0;
   reg [31:0] prev_time = 0;
@@ -780,6 +1025,23 @@ module core_top (
 
       .blend_enabled(blend_enabled_s),
 
+      // PAR MK3 (synced into clk_sys_21_48)
+      .mk3_switch_pos(mk3_switch_pos_s),
+      .mk3_soft_reset_req(mk3_soft_reset_req_s),
+
+      // PAR MK3 BIOS loader (in clk_sys_21_48; data_loader handles its own CDC)
+      .mk3_bios_we       (mk3_bios_we),
+      .mk3_bios_load_addr(mk3_bios_load_addr),
+      .mk3_bios_load_din (mk3_bios_load_din),
+
+      // PAR MK3: true once all data slots are loaded (SNES ROM and mk3.bios
+      // present). Drives the MK3 FSM's enable-cheats logic.
+      .mk3_game_loaded   (mk3_game_loaded_s),
+      .mk3_leds          (mk3_leds_from_core),
+      .mk3_led_pos(mk3_led_pos_s),
+      .mk3_par_toggle(mk3_par_toggle_s),
+      .mk3_eff_mode      (mk3_eff_mode_core),
+
       // Input
       .p1_button_a(cont1_key_s[4]),
       .p1_button_b(cont1_key_s[5]),
@@ -796,6 +1058,9 @@ module core_top (
 
       .p1_lstick_x(cont1_joy_x_calibrated),
       .p1_lstick_y(cont1_joy_y_calibrated),
+
+      .mk3_mouse(mk3_mouse),
+      .mk3_mouse_port(mk3_mouse_port_s),
 
       .p2_button_a(cont2_key_s[4]),
       .p2_button_b(cont2_key_s[5]),
@@ -854,6 +1119,15 @@ module core_top (
       .sd_buff_addr(sd_buff_addr),
       .sd_buff_din(sd_buff_din),
       .sd_buff_dout(sd_buff_dout),
+
+      // PAR MK3 second save channel for the 32 KB cheat SRAM (slot 11).
+      // Byte-wide; 15-bit addresses (only [14:0] of the 17-bit bus used).
+      .mk3sv_wr      (mk3sv_wr),
+      .mk3sv_rd      (mk3sv_rd),
+      .mk3sv_addr_in (mk3sv_addr_in[14:0]),
+      .mk3sv_addr_out(mk3sv_addr_out[14:0]),
+      .mk3sv_dout    (mk3sv_dout),
+      .mk3sv_din     (mk3sv_din),
 
       .sram_size(sram_size),
 

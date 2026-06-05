@@ -1,0 +1,10 @@
+# ==============================================================================
+# Pro Action Replay MK3 hardware emulation modules
+# ==============================================================================
+set_global_assignment -name VHDL_FILE          [file join $::quartus(qip_path) mk3_sram.vhd ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) mk3_io.sv ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) mk3_mapper.sv ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) mk3_intercept.sv ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) mk3_nmi_hook.sv ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) mk3_switch_fsm.sv ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) mk3_snes_top.sv ]

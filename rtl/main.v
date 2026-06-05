@@ -117,12 +117,42 @@ module main #(
     input         MSU_ENABLE,
 
     output [15:0] AUDIO_L,
-    output [15:0] AUDIO_R
+    output [15:0] AUDIO_R,
+
+    // PAR MK3 SNES control signals (synchronized in core_top.sv to MCLK domain)
+    input  [1:0] MK3_SWITCH_POS,
+    input        MK3_PAR_TOGGLE,
+    input        MK3_SOFT_RESET_REQ,
+    input        MK3_GAME_LOADED,        // 1 = all required dataslots loaded
+    output [1:0] MK3_LEDS,               // {right LED, left LED} status
+    output [1:0] MK3_EFF_MODE,           // effective mapper mode (0=Menu,1=Cheats,2=NoCheats)
+    output       MK3_EFF_PAL,            // latched region (1=PAL/50Hz, 0=NTSC/60Hz)
+
+    // PAR MK3 BIOS loader interface (driven by core_top.sv asset slot 100 loader)
+    input         MK3_BIOS_WE,
+    input  [16:0] MK3_BIOS_LOAD_ADDR,
+    input  [7:0]  MK3_BIOS_LOAD_DIN,
+
+    // PAR MK3 BIOS read interface. MAIN_SNES redirects the SDRAM read to offset
+    // BIOS_BASE (8 MB) when MK3_BIOS_READ is asserted; byte returns on MK3_BIOS_DOUT.
+    output        MK3_BIOS_READ,
+    output [16:0] MK3_BIOS_READ_ADDR,
+    input  [7:0]  MK3_BIOS_DOUT,
+
+    // PAR MK3 second save channel: persists the 32 KB cheat SRAM (Pocket slot 11)
+    // via dual-port mk3_sram port B. Independent of port A (SNES cheat-write path).
+    input         MK3SV_WR,         // 1 = restoring SRAM (write into port B)
+    input         MK3SV_RD,         // 1 = saving SRAM (read back via port B)
+    input  [14:0] MK3SV_ADDR_IN,    // restore (write) byte address
+    input  [14:0] MK3SV_ADDR_OUT,   // save (read) byte address
+    input  [7:0]  MK3SV_DOUT,       // byte to write into SRAM on restore
+    output [7:0]  MK3SV_DIN         // SRAM byte read back on save
 );
 
   parameter USE_DLH = 1'b1;
 
   wire [23:0] CA;
+  wire [23:0] CA_RAW;   // PAR MK3: pre-mirror CPU address ($00-$3F:0000-1FFF not remapped to $7E)
   wire        CPURD_N;
   wire        CPUWR_N;
   reg  [ 7:0] DI;
@@ -139,14 +169,78 @@ module main #(
 
   wire [ 5:0] MAP_ACTIVE;
 
+  // PAR MK3 combined reset. SNES is held in reset when any of: base RESET_N,
+  // the switch FSM soft-reset pulse (mk3_soft_reset_pulse, declared below), or
+  // the Pocket UI soft-reset request (MK3_SOFT_RESET_REQ).
+  //
+  // MK3_SOFT_RESET_REQ is a short pulse (core_top.sv self-clears it). Too brief
+  // to reset the CPU/PPU/APU reset-sync chains, so we edge-detect and stretch it
+  // to ~256 MCLK (the switch FSM width).
+  reg  [8:0]  mk3_srst_ctr = 9'd0;
+  reg         mk3_srst_req_d = 1'b0;
+  always @(posedge MCLK or negedge RESET_N) begin
+    if (!RESET_N) begin
+      mk3_srst_ctr   <= 9'd0;
+      mk3_srst_req_d <= 1'b0;
+    end else begin
+      mk3_srst_req_d <= MK3_SOFT_RESET_REQ;
+      // Rising edge arms the stretch counter.
+      if (MK3_SOFT_RESET_REQ && !mk3_srst_req_d) begin
+        mk3_srst_ctr <= 9'd256;
+      end else if (mk3_srst_ctr != 9'd0) begin
+        mk3_srst_ctr <= mk3_srst_ctr - 9'd1;
+      end
+    end
+  end
+  wire        mk3_soft_reset_stretched = (mk3_srst_ctr != 9'd0);
+
+  wire        mk3_soft_reset_pulse;
+  wire        snes_reset_combined = RESET_N & ~(mk3_soft_reset_pulse | mk3_soft_reset_stretched);
+
+  // PAR MK3 runtime PAL/NTSC region override.
+  //
+  // The MK3 OPTIONS region menu writes control_a[7:6] at game launch ($80=PAL,
+  // $40=NTSC, $00=neither). control_a is snooped by mk3_io and exposed here as
+  // mk3_control_a_dbg. Priority: bit7 forces PAL, bit6 forces NTSC, neither keeps
+  // the boot-time PAL flag.
+  //
+  // effective_pal feeds the SNES core .pal() input. The PPU consumes PAL
+  // combinationally per frame (PPU.vhd ~line 807 picks NTSC 262 / PAL 312 line
+  // counts), so flipping it re-times the frame at the next vertical wrap with no
+  // reset and no PLL change. SNES.sv's new_vmode reg is unused here.
+  //
+  // We latch the last real region write because the BIOS reuses control_a for the
+  // ROM-peek ($80:A578 header read writes $00/$10 at $80:A59C), which would
+  // otherwise clear the region bits a few frames after launch. Falls back to the
+  // boot PAL flag until the BIOS sets a region at least once.
+  reg eff_region_pal  = 1'b0;
+  reg eff_region_seen = 1'b0;
+  always @(posedge MCLK) begin
+    if (mk3_control_a_dbg[7]) begin
+      eff_region_pal  <= 1'b1;   // PAL  selected
+      eff_region_seen <= 1'b1;
+    end else if (mk3_control_a_dbg[6]) begin
+      eff_region_pal  <= 1'b0;   // NTSC selected
+      eff_region_seen <= 1'b1;
+    end
+    // control_a $00/$10 (peek/clear): hold the latched region, don't revert.
+  end
+  wire effective_pal = eff_region_seen ? eff_region_pal : PAL;
+
+  // Expose region + mapper mode to MAIN_SNES for the LED overlay gate + P/N
+  // indicator, and via MAIN_SNES to core_top for the menu read-back.
+  assign MK3_EFF_PAL  = effective_pal;
+  assign MK3_EFF_MODE = mk3_eff_mode_dbg;
+
   SNES SNES (
       .mclk  (MCLK),
       .dspclk(ACLK),
 
-      .rst_n (RESET_N),
+      .rst_n (snes_reset_combined),
       .enable(1),
 
       .ca(CA),
+      .ca_raw(CA_RAW),
       .cpurd_n(CPURD_N),
       .cpuwr_n(CPUWR_N),
 
@@ -200,7 +294,7 @@ module main #(
       .joy2_p6_in(JOY2_P6_in),
 
       .blend(BLEND),
-      .pal(PAL),
+      .pal(effective_pal),   // PAR MK3 runtime region override
       .high_res(HIGH_RES),
       .field_out(FIELD),
       .interlace(INTERLACE),
@@ -231,6 +325,185 @@ module main #(
       .audio_l(AUDIO_L),
       .audio_r(AUDIO_R)
   );
+
+  // PAR MK3 SNES wrapper instantiation.
+  // Bridge path: Pocket UI bridge_wr, core_top mk3_switch_pos, synch_3 to clk_sys,
+  // MAIN_SNES, main.v MK3_SWITCH_POS, then mk3_snes_top here.
+  //
+  // PAR MK3 BIOS, addressed via SDRAM (see below).
+  // Write port: asset slot 100 loader in core_top.sv feeds the MK3_BIOS_* ports
+  // through MAIN_SNES. Read port: mk3_snes_top's bios_read_addr; byte returns one
+  // cycle later on bios_dout.
+  wire [16:0] mk3_bios_read_addr;
+  wire [7:0]  mk3_bios_dout = MK3_BIOS_DOUT;
+  // sel_mk3_bios from mk3_snes_top flags a BIOS read; forward it up as
+  // MK3_BIOS_READ so MAIN_SNES can drive the SDRAM port.
+  wire        mk3_sel_mk3_bios_out;
+  assign      MK3_BIOS_READ      = mk3_sel_mk3_bios_out;
+  assign      MK3_BIOS_READ_ADDR = mk3_bios_read_addr;
+
+  // MK3 cart-data override; wins over every chip's _DO selection. Driven
+  // combinationally by mk3_snes_top, priority nmi_hook > intercept > sel_mk3_bios
+  // > sel_mk3_sram > fall-through. Handles cheats, NMI redirect, BIOS and SRAM reads.
+  wire        mk3_cart_override_hit;
+  wire [7:0]  mk3_cart_override_data;
+
+  // MK3 SRAM (32 KB block-RAM, emulates the HY62256A on the original MK3 PCB).
+  // Kept in main.v so the cart-data path can reach it independently of mk3_snes_top.
+  wire [14:0] mk3_sram_addr;
+  wire        mk3_sram_ce;
+  wire        mk3_sram_we;
+  wire [7:0]  mk3_sram_din;
+  wire [7:0]  mk3_sram_dout;
+
+  // Port B = Pocket save engine (slot 11). One address bus: write address while
+  // restoring (MK3SV_WR), read address while saving. Independent of port A, so
+  // simultaneous save-read + cheat-write is safe.
+  wire [14:0] mk3_sram_sv_addr = MK3SV_WR ? MK3SV_ADDR_IN : MK3SV_ADDR_OUT;
+
+  // Restore the saved 32 KB image verbatim. The $ABCD warm-boot cookie is stamped
+  // into the image only after the BIOS cold-init runs (see the stamper below), so
+  // a valid save already carries it; injecting it on restore would warm-boot an
+  // uninitialised, all-zero list.
+  wire [7:0] mk3_sram_sv_din = MK3SV_DOUT;
+
+  // MK3SV_RD (save-engine read strobe) is unused: port B presents sv_q every
+  // cycle with no read-enable. Kept on the interface for symmetry; tie it off.
+  /* verilator lint_off UNUSEDSIGNAL */
+  wire _unused_mk3sv_rd = MK3SV_RD;
+  /* verilator lint_on UNUSEDSIGNAL */
+
+  mk3_sram u_mk3_sram (
+      .clk  (MCLK),
+      .rst_n(RESET_N),
+      // Port A: SNES cartridge bus (unregistered async read)
+      .ce   (mk3_sram_ce),
+      .we   (mk3_sram_we),
+      .addr (mk3_sram_addr),
+      .din  (mk3_sram_din),
+      .dout (mk3_sram_dout),
+      // Port B: shared by the Pocket save/restore engine and the warm-boot cookie
+      // stamper. Save engine has priority; when idle the stamper writes $ABCD into $6194.
+      .sv_addr(mk3_pb_addr),
+      .sv_din (mk3_pb_din),
+      .sv_wren(mk3_pb_wren),
+      .sv_q   (MK3SV_DIN)
+  );
+
+  // Warm-boot cookie stamper (event-based persistence).
+  // The MK3 BIOS keeps the $6300 parameter list across boots only if DP $94
+  // ($6194) == $ABCD; otherwise the cold path ($80:90B2) zeroes the list. That
+  // cookie is written only by the factory self-test ($80:9668), so without help
+  // every boot is cold.
+  //
+  // We stamp $6194=$ABCD so the save carries it, but not before the BIOS runs its
+  // cold/warm check ($80:8247) and cold-init ($80:90B2), else it warm-boots an
+  // uninitialised list. A fixed timer can't guarantee the ordering (the 128 KB
+  // BIOS + ROM stream delays boot unpredictably), so trigger on the BIOS writing
+  // the list: $90B2 fills the 100x7-byte records at $6300..$65BB (flat offset
+  // $0300..$05BB), which happens only after $8247. Stamp once per boot when the
+  // save engine is idle. A genuine warm boot skips $90B2, so no list write and no
+  // re-stamp. Re-arms on every reset; port A is untouched.
+  reg [2:0]  magic_st;            // 0 wait-reset, 1 armed, 2 write $194, 3 write $195, 4 done
+  reg        magic_we;
+  reg [14:0] magic_addr;
+  reg [7:0]  magic_din;
+  wire       sv_busy    = MK3SV_WR | MK3SV_RD;
+  // CPU write into the cheat-list region means $90B2 ran (or the user edited a
+  // cheat). Either way the list is real, so it's safe to mark the image warm-bootable.
+  wire       list_write = mk3_sram_ce & mk3_sram_we &
+                          (mk3_sram_addr >= 15'h0300) & (mk3_sram_addr <= 15'h05BB);
+  always @(posedge MCLK) begin
+    magic_we <= 1'b0;
+    case (magic_st)
+      3'd0: if (RESET_N)    magic_st <= 3'd1;       // arm once the SNES leaves reset
+      3'd1: if (list_write) magic_st <= 3'd2;       // list got written
+      3'd2: if (~sv_busy) begin magic_addr <= 15'h0194; magic_din <= 8'hCD; magic_we <= 1'b1; magic_st <= 3'd3; end
+      3'd3: if (~sv_busy) begin magic_addr <= 15'h0195; magic_din <= 8'hAB; magic_we <= 1'b1; magic_st <= 3'd4; end
+      3'd4: if (~RESET_N)   magic_st <= 3'd0;        // re-arm after reset
+      default: magic_st <= 3'd0;
+    endcase
+  end
+
+  // Port-B arbitration: save engine wins; otherwise the cookie stamper drives it.
+  wire        mk3_pb_wren = sv_busy ? MK3SV_WR        : magic_we;
+  wire [14:0] mk3_pb_addr = sv_busy ? mk3_sram_sv_addr: magic_addr;
+  wire [7:0]  mk3_pb_din  = sv_busy ? mk3_sram_sv_din : magic_din;
+
+  // Warm-boot read override.
+  // The cold path $80:90B2 wipes the $6300 list and is gated by the $6194 cookie
+  // ($8247/$813D/$81B6 all do lda $94 / cmp #$ABCD). Relying on the cookie
+  // surviving in the saved image proved unreliable on HW. So once a real save has
+  // been restored this power-cycle, force the CPU read of $6194/$6195 to $CD/$AB
+  // (little-endian $ABCD); the BIOS then always takes the warm path.
+  //
+  // $94 is only read at the cookie checks, so overriding its read is safe. Only
+  // the CPU read port (sram_dout) is overridden; the save read-back (port B) is
+  // untouched. A first-ever boot with no save is not overridden.
+  reg mk3_save_restored = 1'b0;
+  always @(posedge MCLK)
+    if (MK3SV_WR & (MK3SV_DOUT != 8'h00)) mk3_save_restored <= 1'b1;
+  wire [7:0] mk3_sram_dout_eff =
+      (mk3_save_restored & mk3_sram_ce & (mk3_sram_addr == 15'h0194)) ? 8'hCD :
+      (mk3_save_restored & mk3_sram_ce & (mk3_sram_addr == 15'h0195)) ? 8'hAB :
+      mk3_sram_dout;
+
+  // BIOS lives in SDRAM, addressed via MK3_BIOS_READ / MK3_BIOS_READ_ADDR up to
+  // MAIN_SNES, byte back on MK3_BIOS_DOUT. MK3_BIOS_WE / MK3_BIOS_LOAD_* flow in
+  // from the core_top.sv asset slot 100 loader and propagate up through MAIN_SNES.
+
+  /* verilator lint_off PINMISSING */
+  mk3_snes_top u_mk3_snes_top (
+      .clk_sys           (MCLK),
+      .rst_n             (RESET_N),
+
+      .bridge_switch_pos (MK3_SWITCH_POS),  // from Pocket bridge via MAIN_SNES
+      .bridge_par_toggle (MK3_PAR_TOGGLE),  // "Pro Action Replay" action toggle bit
+      .bridge_leds       (MK3_LEDS),        // out to core_top.sv bridge_rd 0x308
+      .bridge_game_loaded(MK3_GAME_LOADED), // dataslot_allcomplete
+
+      // mk3_snes_top's own bios_we/load_* inputs are unused: the asset loader
+      // writes the SDRAM BIOS directly. We only feed the read result back so the
+      // wrapper's internal mapper sees the BIOS bytes.
+      .bios_we           (1'b0),
+      .bios_load_addr    (17'd0),
+      .bios_load_din     (8'd0),
+      .bios_dout         (mk3_bios_dout),         // from the SDRAM BIOS
+      .bios_read_addr    (mk3_bios_read_addr),    // to the SDRAM BIOS
+
+      .sram_dout         (mk3_sram_dout_eff),     // from u_mk3_sram (+ warm-boot $6194 read override)
+      .sram_addr         (mk3_sram_addr),         // to u_mk3_sram
+      .sram_ce           (mk3_sram_ce),
+      .sram_we_out       (mk3_sram_we),
+      .sram_din          (mk3_sram_din),
+
+      // Use the pre-mirror address. The MK3 IO registers live at bank $10
+      // ($10001C control-A, $100000-1B cheat slots), which the SNES core remaps to
+      // WRAM $7E:00xx (CPU.vhd:407) before CA. The real PCB sees the un-mirrored
+      // edge-connector address, so snoop CA_RAW. CA_RAW == CA except in
+      // $00-$3F:0000-1FFF, which the MK3 mapper never decodes for SRAM/ROM.
+      .cpu_addr          (CA_RAW),
+      .cpu_we            (~CPUWR_N),        // active-high from active-low strobe
+      .cpu_din           (DO),
+      .cpu_sysclkf_ce    (SYSCLKF_CE),      // single-cycle write-commit strobe
+
+      .cart_override_hit (mk3_cart_override_hit),    // DI mux at end of module
+      .cart_override_data(mk3_cart_override_data),
+      .sel_mk3_bios      (mk3_sel_mk3_bios_out),     // MAIN_SNES SDRAM mux trigger
+      .sel_game_rom      (),                          //  (unused)
+      .sel_mk3_sram      (),                          //  (cart_override folds it in)
+      .sram_offset       (),
+      .bios_offset       (),
+      .game_offset       (),
+      .dbg_control_a     (mk3_control_a_dbg),        // region latch (load-bearing)
+      .dbg_effective_mode(mk3_eff_mode_dbg),         // mode read-back (load-bearing)
+
+      .snes_soft_reset   (mk3_soft_reset_pulse)   // OR'd into snes_reset_combined above
+  );
+  wire [7:0]  mk3_control_a_dbg;
+  wire [1:0]  mk3_eff_mode_dbg;
+
+  /* verilator lint_on PINMISSING */
 
   wire [7:0] MSU_DO;
   wire       MSU_SEL;
@@ -838,6 +1111,12 @@ module main #(
     endcase
 
     if (MSU_SEL) DI = MSU_DO;
+
+    // PAR MK3 final-stage override (highest priority). On cart_override_hit the
+    // MK3 byte wins over the underlying chip's read. Covers cheats during
+    // gameplay, NMI vector redirect ($00:FFEA/$FFEB) for slots 5/6, and BIOS
+    // bytes in MK3 Menu mode.
+    if (mk3_cart_override_hit) DI = mk3_cart_override_data;
   end
 
 endmodule
