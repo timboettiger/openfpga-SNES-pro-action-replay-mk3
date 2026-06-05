@@ -17,6 +17,7 @@ entity SNES is
 		BLEND			: in std_logic;
 		
 		CA       	: out std_logic_vector(23 downto 0);
+		CA_RAW		: out std_logic_vector(23 downto 0);   -- PAR MK3: pre-mirror CPU address for MK3 snoop
 		CPURD_N		: out std_logic;
 		CPUWR_N		: out std_logic;
 		
@@ -109,6 +110,7 @@ architecture rtl of SNES is
 
 	-- SCPU
 	signal INT_CA : std_logic_vector(23 downto 0);
+	signal INT_CA_RAW : std_logic_vector(23 downto 0);   -- PAR MK3: pre-mirror address
 	signal INT_CPURD_N : std_logic;
 	signal INT_CPUWR_N : std_logic;
 	signal CPU_DI : std_logic_vector(7 downto 0);
@@ -209,6 +211,7 @@ begin
 		IRQ_N			=> IRQ_N,
 		
 		CA				=> INT_CA,
+		CA_RAW		=> INT_CA_RAW,
 		CPURD_N		=> INT_CPURD_N,
 		CPUWR_N		=> INT_CPUWR_N,
 		PA				=> INT_PA,
@@ -402,6 +405,7 @@ begin
 	);
 
 	CA <= INT_CA;
+	CA_RAW <= INT_CA_RAW;   -- PAR MK3: re-export pre-mirror address
 	CPURD_N <= INT_CPURD_N;
 	CPUWR_N <= INT_CPUWR_N;
 	

@@ -1,0 +1,45 @@
+{
+  "data": {
+    "magic": "APF_VER_1",
+    "data_slots": [
+      {
+        "name": "Cartridge",
+        "id": 0,
+        "required": true,
+        "parameters": "0x109",
+        "extensions": ["smc", "sfc", "bs"],
+        "address": "0x10000000"
+      },
+      {
+        "name": "Save",
+        "id": 10,
+        "required": false,
+        "parameters": "0x84",
+        "nonvolatile": true,
+        "extensions": ["sav", "srm"],
+        "address": "0x20000000",
+        "size_maximum": "0x20000"
+      },
+      {
+        "name": "MK3 Cheats",
+        "id": 11,
+        "required": false,
+        "parameters": "0x84",
+        "nonvolatile": true,
+        "extensions": ["mk3sav"],
+        "address": "0x40000000",
+        "size_maximum": "0x8000"
+      },
+      {
+        "name": "MK3 BIOS",
+        "id": 100,
+        "required": true,
+        "parameters": "0x18A",
+        "extensions": ["bin"],
+        "filename": "snes-pro-action-replay-mk3.bin",
+        "address": "0x30000000",
+        "size_exact": "0x20000"
+      }
+    ]
+  }
+}

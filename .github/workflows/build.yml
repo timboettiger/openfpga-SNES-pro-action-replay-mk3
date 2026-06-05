@@ -1,113 +1,57 @@
-################################################################################
-# How to create a tag to launch the workflow
-# git tag -a "0.1.0" -m "Release v0.1.0"
-# git push origin --tags
-################################################################################
-# WARNING: Make sure to set action permissions to max ("Read and write permissions")
-name: Build/Release
+# Build and release the core on a version tag.
+#   git tag v0.3.0        && git push origin v0.3.0        -> release
+#   git tag v0.3.0-beta   && git push origin v0.3.0-beta   -> pre-release
+# Repo setting: Actions -> Workflow permissions -> "Read and write".
+name: Build & Release
+
 on:
-  workflow_dispatch:
   push:
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+*"
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  synthesis:
+  build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        core: ["main", "pal", "spc", "sa1gsu", "pal_sa1gsu"]
-
     steps:
-      - name: "🧰 Checkout Repository"
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: "🧰 Checkout Packybara"
-        uses: actions/checkout@v4
-        with:
-          repository: "agg23/pocketpublish"
-          path: ".github/publish"
-
-      - name: "🏗️ Compile design"
-        shell: bash
+      - name: Compile bitstream
         run: |
-          map_value() {
-              case "$1" in
-                  main)
-                      echo "ntsc"
-                      ;;
-                  pal)
-                      echo "pal"
-                      ;;
-                  spc)
-                      echo "ntsc_spc"
-                      ;;
-                  sa1gsu)
-                      echo "ntsc_sa1gsu"
-                      ;;
-                  pal_sa1gsu)
-                      echo "pal_sa1gsu"
-                      ;;
-                  *)
-                      echo "Unknown input"
-                      ;;
-              esac
-          }
+          docker run --rm -v "${{ github.workspace }}:/build" -w /build \
+            raetro/quartus:21.1 \
+            quartus_sh --flow compile projects/snes_pocket.qpf
+          sudo chown -R "$USER" projects/output_files
 
-          build_type=$(map_value "${{ matrix.core }}")
-          cmd="docker run --rm -v ${{ github.workspace }}:/build raetro/quartus:21.1 quartus_sh -t generate.tcl $build_type"
-          echo "Running command: $cmd"
-          eval $cmd
-
-      - name: Upload failure artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload logs on failure
         if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          name: failure_output_files
+          name: quartus-output
           path: projects/output_files/
 
-      - name: Reverse bitstream
-        shell: bash
-        run: |
-          mkdir artifacts
-          pip3 install -r .github/publish/requirements.txt
-          python3 .github/publish/reverse.py projects/output_files/snes_pocket.rbf artifacts/snes_${{ matrix.core }}.rev
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          name: snes_${{ matrix.core }}
-          path: artifacts/snes_${{ matrix.core }}.rev
+          python-version: "3.x"
 
-  packaging:
-    runs-on: ubuntu-latest
-    needs: synthesis
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: "🧰 Checkout Repository"
-        uses: actions/checkout@v4
-
-      - name: "🧰 Checkout Packybara"
-        uses: actions/checkout@v4
-        with:
-          repository: "agg23/pocketpublish"
-          path: ".github/publish"
-
-      - name: "Create folders"
+      - name: Convert assets
+        # loader.bin is committed (rebuild locally with scripts/build-loader.sh
+        # when support/mk3_loader.asm changes).
         run: |
-          pip3 install -r .github/publish/requirements.txt
-          python3 .github/publish/create_folders.py
+          python3 -m pip install --quiet pillow
+          scripts/build-icon-image.sh
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - name: Package core
+        run: scripts/build-release.sh
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
         with:
-          path: staging/Cores/agg23.SNES/
-          merge-multiple: true
-
-      - name: "Release"
-        run: |
-          python3 .github/publish/release.py
+          files: release/*.zip
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true

@@ -1,90 +1,84 @@
-# SNES for Analogue Pocket
+# Pro Action Replay MK3 for Analogue Pocket
 
-Ported from the original core developed by [srg320](https://github.com/srg320) ([Patreon](https://www.patreon.com/srg320)). Latest upstream available at https://github.com/MiSTer-devel/SNES_MiSTer.
-
-Please report any issues encountered to this repo. Most likely any problems are a result of my port, not the original core. Issues will be upstreamed as necessary.
-
-> [!WARNING]
-> 
-> Savestates/Memories/Sleep not supported
->
-> Savestates/Memories/Sleep are not supported by any FPGA SNES core. Not this one, not the MiSTer core it's ported from, not the Analogue Super NT one.
-> 
-> **Support for savestates will _not_ be coming** to any of these cores. Do not ask. If you would like to learn more, see [issue #59](https://github.com/agg23/openfpga-SNES/issues/59) and [this discussion on the MiSTer forums](https://misterfpga.org/viewtopic.php?t=4944).
-
-## Installation
-
-### Easy mode
-
-I highly recommend the updater tools by [@mattpannella](https://github.com/mattpannella) and [@RetroDriven](https://github.com/RetroDriven). If you're running Windows, use [the RetroDriven GUI](https://github.com/RetroDriven/Pocket_Updater), or if you prefer the CLI, use [the mattpannella tool](https://github.com/mattpannella/pocket_core_autoupdate_net). Either of these will allow you to automatically download and install openFPGA cores onto your Analogue Pocket. Go donate to them if you can
-
-### Manual mode
-To install the core, copy the `Assets`, `Cores`, and `Platform` folders over to the root of your SD card. Please note that Finder on macOS automatically _replaces_ folders, rather than merging them like Windows does, so you have to manually merge the folders.
-
-## Usage
-
-ROMs should be placed in `/Assets/snes/common`. Both headered and unheadered ROMs are now supported.
+A SNES core for the Analogue Pocket that emulates the Datel **Pro Action Replay
+MK3** cheat cartridge on top of [agg23's openFPGA SNES core](https://github.com/agg23/openfpga-SNES)
+(a port of [srg320's MiSTer SNES](https://github.com/MiSTer-devel/SNES_MiSTer)).
+The MK3 BIOS wraps a standard SNES ROM and provides the cartridge's cheat entry,
+trainer, and live cheat application.
 
 ## Features
 
-### Dock Support
+### This core adds
 
-Core supports four players/controllers via the Analogue Dock. To enable four player mode, turn on `Use Multitap` setting.
+- **Pro Action Replay MK3:** boots into the MK3 BIOS (the Pro Action Replay UI)
+  for cheat-code entry, trainer, and live cheat application. A pause-menu action
+  returns to the BIOS from a running game, the Cheats / Trainer option toggles
+  cheats (also live in-game), and the cheat list is saved to the SD card and
+  restored on the next launch.
+- **Cartridge LEDs:** an on-screen recreation of the cartridge's front-panel
+  LEDs, placeable in any corner or hidden.
+- **Mouse on the Analogue Dock:** a USB mouse acts as the SNES Mouse, on SNES
+  port 1 or 2 (Mouse Port), in games and in the BIOS. Without one, the D-Pad or
+  left analog stick emulates it.
 
-### Expansion Chips
+### Inherited from agg23's SNES core
 
-All original expansion chips supported by MiSTer are also supported on the Pocket. The full list is:
+- SNES emulation, NTSC and PAL
+- Enhancement chips: SuperFX, SA-1, DSP-1/2/3/4, CX4, S-DD1, SPC7110, BS-X, MSU-1
+- Controllers: gamepad, SNES Mouse, Super Scope, Justifier, and up to four
+  players via Multitap
+- CPU and SuperFX overclock (CPU Turbo / SuperFX Turbo)
+- Video options: square pixels, pseudo-transparency
 
-* SA-1 (Super Mario RPG)
-* Super FX/GSU-1/2 (Star Fox)
-* DSP (Super Mario Kart)
-* CX4 (Mega Man X 2)
-* S-DD1 (Star Ocean)
-* SPC7110 (Far East of Eden)
-* ST1010 (F1 Roc 2)
-* BSX (Satellaview)
+## Install
 
-The Super Game Boy, ST011 (Hayazashi Nidan Morita Shougi), and ST018 (Hayazashi Nidan Morita Shougi 2) are not supported in the MiSTer core, and therefore are not supported here. Additionally, the homebrew MSU expansion chip is not currently supported.
+1. Extract the latest release ZIP to the root of your Pocket SD card.
+2. Place a verified 128 KB MK3 BIOS dump at
+   `Assets/snes/timboettiger.Pro Action Replay/snes-pro-action-replay-mk3.bin`.
+   The BIOS is proprietary Datel firmware and is not distributed here.
+3. Load any SNES ROM through the Pocket UI.
 
-#### BSX
+## Usage
 
-BSX ROMs must be patched to run without BIOS. The BSX BIOS is not currently supported
+The core powers on into the MK3 BIOS, the Pro Action Replay UI. Enter codes
+there, then start the game from the BIOS menu. Two core options control it:
 
-### Savestates/Memories/Sleep
+- **Cheats / Trainer**: whether the launched game runs with cheats applied
+  (can also be toggled live in-game)
+- **Pro Action Replay**: pause-menu action that jumps back into the BIOS from a
+  running game, like the button on the cartridge
 
-> **Warning**: Not supported
+## Controls
 
-Savestates/Memories/Sleep are not supported by any FPGA SNES core. Not this one, not the MiSTer core it's ported from, not the Analogue Super NT one.
+A USB mouse on the Analogue Dock works as the SNES Mouse automatically (Mario
+Paint and similar); the **Mouse Port** option places it on SNES port 1 or 2.
+Without a USB mouse, set *Controller Options* to **Mouse** to drive the SNES
+Mouse from the D-Pad or left analog stick.
 
-**Support for savestates will _not_ be coming** to any of these cores. Do not ask. If you would like to learn more, see [issue #59](https://github.com/agg23/openfpga-SNES/issues/59) and [this discussion on the MiSTer forums](https://misterfpga.org/viewtopic.php?t=4944).
+## Documentation
 
-### Video
+The user manuals and the full reverse-engineering documentation live in the
+parent project: <https://github.com/timboettiger/action-replay-mk-iii>.
 
-* `Square Pixels` - The internal resolution of the SNES is a 8:7 pixel aspect ratio (wide pixels), which roughly corresponds to what users would see on 4:3 display aspect ratio CRTs. Some games are designed to be displayed at 8:7 PAR (the core's default), and others at 1:1 PAR (square pixels). The `Square Pixels` option is provided to switch to a 1:1 pixel aspect ratio
-* `Pseudo Transparency` - Enable blending of adjacent pixels, used in some games to simulate transparency
+## Build & release
 
-### Turbo
+Pushing a version tag builds and publishes a release via GitHub Actions
+(`.github/workflows/build.yml`):
 
-* `CPU Turbo` - Applies a speed increase to the main SNES CPU. **NOTE:** This has different compatibility with different games. See the [MiSTer list of games](https://github.com/MiSTer-devel/SNES_MiSTer/blob/master/SNES_Turbo.md) that this feature works with
-* `SuperFX Turbo` - Applies a speed increase to the GSU (SuperFX) chip. Can be used in addition to the `CPU Turbo` option in games like Star Fox to maintain a higher frame rate.
+```
+git tag v0.3.0 && git push origin v0.3.0            # release
+git tag v0.3.0-beta && git push origin v0.3.0-beta  # pre-release
+```
 
-### Controller Options
+It compiles the bitstream (Quartus in Docker), converts the assets, packages the
+core, and attaches the ZIP to the release.
 
-There are several options provided for selecting which type of controller the core will emulate.
+To build locally: compile `projects/snes_pocket.qpf` with Quartus, then run
+`scripts/build-release.sh`. Other helpers: `scripts/build-loader.sh` (chip32
+loader), and `scripts/build-icon-image.sh` / `scripts/build-platform-image.sh`
+(PNG to Pocket `.bin`).
 
-* `Gamepad` - The standard SNES controller used with most games.
-* `Super Scope` - The Super Scope lightgun that's used with most lightgun games. See Lightguns for more details.
-* `Justifier` - The Justifier lightgun that's used with Lethal Enforcers. See Lightguns for more details.
-* `Mouse` - The SNES mouse that's used with Mario Paint and several other games. See SNES Mouse for more details.
+## Credits & licence
 
-### Lightguns
-
-Core supports virtual lightguns by selecting the `Super Scope` or `Justifier` options under `Controller Options`. Most lightgun games user the Super Scope but Lethal Enforcers uses the Justifier. The crosshair can be controlled with the D-Pad or left joystick, using the A button to fire and the B button to reload. D-Pad aim sensitivity can be adjusted with the `D-Pad Aim Speed` setting.
-
-**NOTE:** Joystick support for aiming only appears to work when a controller is paired over Bluetooth and not connected to the Analogue Dock directly by USB.
-
-### SNES Mouse
-
-Core supports a virtual SNES mouse by selecting `Mouse` under `Controller Options`. The mouse can be moved with the D-Pad or left joystick and left and right clicks can be performed by pressing the A and B buttons respectively. Mouse D-Pad movement sensitivity can be adjusted with the `D-Pad Aim Speed` setting.
-
-**NOTE:** The dock firmware doesn't currently support a USB mouse.
+SNES core by srg320, openFPGA port by agg23, MK3 emulation by Tim Boettiger.
+GPL-3.0, see `LICENSE`; redistributions must include source.

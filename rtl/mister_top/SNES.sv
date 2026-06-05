@@ -18,6 +18,22 @@ module MAIN_SNES (
 
     input wire blend_enabled,
 
+    // PAR MK3 settings (synchronized to clk_sys_21_48 by core_top.sv)
+    input  wire [1:0] mk3_switch_pos,
+    input  wire       mk3_soft_reset_req,
+    input  wire       mk3_game_loaded,   // dataslot_allcomplete sync'd
+    output wire [1:0] mk3_leds,          // driven by mk3_io's LED register
+    input  wire [3:0] mk3_led_pos,       // LED overlay position: 0=hide, 1..9 = 3x3 grid
+    input  wire       mk3_par_toggle,    // flips on each "Pro Action Replay" action
+    output wire [1:0] mk3_eff_mode,      // effective mapper mode to core_top
+
+    // PAR MK3 BIOS loader (driven by core_top.sv asset slot 100 loader)
+    input wire        mk3_bios_we,
+    input wire [16:0] mk3_bios_load_addr,
+    input wire [7:0]  mk3_bios_load_din,
+
+    // BIOS-read path is internal: main.v emits the request, the SDRAM mux consumes it. No top-level port.
+
     // Inputs
     input wire p1_button_a,
     input wire p1_button_b,
@@ -34,6 +50,10 @@ module MAIN_SNES (
 
     input wire [7:0] p1_lstick_x,
     input wire [7:0] p1_lstick_y,
+
+    // Real USB mouse (any dock slot), packed by core_top, + chosen SNES port
+    input wire [50:0] mk3_mouse,
+    input wire        mk3_mouse_port,
 
     input wire p2_button_a,
     input wire p2_button_b,
@@ -92,6 +112,15 @@ module MAIN_SNES (
     input wire [16:0] sd_buff_addr,
     output wire [15:0] sd_buff_din,
     input wire [15:0] sd_buff_dout,
+
+    // PAR MK3: second save channel for the 32 KB cheat SRAM (Pocket slot 11).
+    // Byte-wide, 15-bit addr. Pass-through to main.v's dual-port mk3_sram (port B).
+    input  wire        mk3sv_wr,        // restore: write SRAM
+    input  wire        mk3sv_rd,        // save: read SRAM back
+    input  wire [14:0] mk3sv_addr_in,   // restore byte address
+    input  wire [14:0] mk3sv_addr_out,  // save byte address
+    input  wire [7:0]  mk3sv_dout,      // restore data byte
+    output wire [7:0]  mk3sv_din,       // save data byte
 
     output reg [3:0] sram_size,
 
@@ -313,6 +342,8 @@ module MAIN_SNES (
   wire [7:0] G;
   wire [7:0] B;
 
+  wire       mk3_eff_pal;   // latched region from main.v (1=PAL, 0=NTSC)
+
   main #(
       .USE_CX4(USE_CX4),
       .USE_SDD1(USE_SDD1),
@@ -336,6 +367,29 @@ module MAIN_SNES (
       .RAM_MASK(ram_mask),
       .PAL(PAL),
       .BLEND(blend_enabled),
+
+      // PAR MK3: pass-through into main.v
+      .MK3_SWITCH_POS    (mk3_switch_pos),
+      .MK3_PAR_TOGGLE    (mk3_par_toggle),
+      .MK3_SOFT_RESET_REQ(mk3_soft_reset_req),
+      .MK3_GAME_LOADED   (mk3_game_loaded),
+      .MK3_LEDS          (mk3_leds),
+      .MK3_EFF_MODE      (mk3_eff_mode),
+      .MK3_EFF_PAL       (mk3_eff_pal),
+      .MK3_BIOS_WE       (mk3_bios_we),
+      .MK3_BIOS_LOAD_ADDR(mk3_bios_load_addr),
+      .MK3_BIOS_LOAD_DIN (mk3_bios_load_din),
+      .MK3_BIOS_READ     (mk3_bios_read_from_main),
+      .MK3_BIOS_READ_ADDR(mk3_bios_read_addr_from_main),
+      .MK3_BIOS_DOUT     (mk3_bios_dout_to_main),
+
+      // PAR MK3: second save channel to dual-port mk3_sram (port B)
+      .MK3SV_WR      (mk3sv_wr),
+      .MK3SV_RD      (mk3sv_rd),
+      .MK3SV_ADDR_IN (mk3sv_addr_in),
+      .MK3SV_ADDR_OUT(mk3sv_addr_out),
+      .MK3SV_DOUT    (mk3sv_dout),
+      .MK3SV_DIN     (mk3sv_din),
 
       .ROM_ADDR(ROM_ADDR),
       .ROM_D(ROM_D),
@@ -442,7 +496,13 @@ module MAIN_SNES (
       .AUDIO_R(audio_r)
   );
 
-  wire reset = core_reset | cart_download | spc_download | bk_loading | clearing_ram | msu_data_download | parser_delay != 0;
+  // PAR MK3: hold SNES in reset until all data slots are loaded. ~mk3_game_loaded
+  // keeps the CPU held until the BIOS loader (slot 100) finishes streaming to
+  // SDRAM, so the reset vector at $00:FFFC reads valid BIOS rather than empty SDRAM.
+  // mk3_game_loaded = dataslot_allcomplete sync'd from clk_74a.
+  wire reset = core_reset | cart_download | spc_download | bk_loading
+             | clearing_ram | msu_data_download | parser_delay != 0
+             | ~mk3_game_loaded;
 
   reg RESET_N = 0;
   reg RFSH = 0;
@@ -455,11 +515,113 @@ module MAIN_SNES (
     if (div == 2) RESET_N <= ~reset;
   end
 
+  // --------------------------------------------------------------------------
+  // PAR MK3 front-panel LED overlay: two 8x4 rounded indicator boxes with a 1px
+  // black border. LED 1 = parameter groups, LED 2 = trainer status.
+  // Cells are 10x6 (1px frame + 8x4 inner), inner corners dimmed. LED on = red,
+  // off = grey. A warm-up gate hides the overlay for ~1.5 s after reset so BIOS
+  // handshake writes to the LED register ($086000 = $01/$02) don't light it.
+  // Gated by mk3_led_pos != 0. Right/bottom edges latched from active width/height.
+  // --------------------------------------------------------------------------
+  reg  [9:0] ov_hx;          // horizontal pixel within active line
+  reg  [9:0] ov_line_end;    // active width  (cols 0..line_end-1)
+  reg  [8:0] ov_vy;          // vertical line within active frame
+  reg  [8:0] ov_frame_end;   // active height (lines 0..frame_end-1)
+  reg        ov_old_hbn, ov_old_vbn;
   always @(posedge clk_sys) begin
-    video_r <= (LG_TARGET && lightgun_enabled) ? {8{LG_TARGET[0]}} : R;
-    video_g <= (LG_TARGET && lightgun_enabled) ? {8{LG_TARGET[1]}} : G;
-    video_b <= (LG_TARGET && lightgun_enabled) ? {8{LG_TARGET[2]}} : B;
+    ov_old_hbn <= hblank_n;
+    ov_old_vbn <= vblank_n;
+    if (~hblank_n)   ov_hx <= 10'd0;
+    else if (dotclk) ov_hx <= ov_hx + 10'd1;
+    if (ov_old_hbn & ~hblank_n)      ov_line_end  <= ov_hx;
+    if (~vblank_n)                   ov_vy        <= 9'd0;
+    else if (~ov_old_hbn & hblank_n) ov_vy        <= ov_vy + 9'd1;
+    if (ov_old_vbn & ~vblank_n)      ov_frame_end <= ov_vy;
   end
+
+  // Warm-up: saturating counter; overlay suppressed until ~1.5 s after reset.
+  reg [25:0] ov_warm;
+  always @(posedge clk_sys) begin
+    if (reset)            ov_warm <= 26'd0;
+    else if (~ov_warm[25]) ov_warm <= ov_warm + 26'd1;
+  end
+  wire ov_ready = ov_warm[25];
+
+  // Two 12x6 LED cells = [Groups][gap][Trainer], 26px x 6px, 2px gap.
+  // Positioned by mk3_led_pos: 0=hide, corners 1=TL 3=TR 7=BL 9=BR.
+  // Groups = mk3_leds[0] (left), Trainer = mk3_leds[1] (right). Each cell is a
+  // rounded box: 1px black frame, transparent outer corners, 8x4 inner fill,
+  // darker inner corners. Pattern per cell (0=transparent, 1=black, 2=light, 3=dark):
+  //   0 0 1 1 1 1 1 1 1 1 0 0
+  //   1 1 3 3 2 2 2 2 3 3 1 1
+  //   1 1 2 2 2 2 2 2 2 2 1 1
+  //   1 1 2 2 2 2 2 2 2 2 1 1
+  //   1 1 3 3 2 2 2 2 3 3 1 1
+  //   0 0 1 1 1 1 1 1 1 1 0 0
+  // Both LEDs show only in CHEATS_ACTIVE mode.
+  localparam [9:0] CL_W  = 10'd26;   // cluster width  (2x12 + 1x2 gap): Groups + Trainer
+  localparam [8:0] CL_H  = 9'd6;     // cluster height
+  localparam [9:0] CL_HM = 10'd4;    // horizontal edge margin
+  localparam [8:0] CL_VM = 9'd2;     // vertical edge margin
+  wire [9:0] le = ov_line_end;
+  wire [8:0] fe = ov_frame_end;
+  wire ov_have = (le >= 10'd48) & (fe >= 9'd10);
+  // 3x3 placement from mk3_led_pos (1..9). col: 1/4/7=L 2/5/8=M 3/6/9=R.
+  wire is_left  = (mk3_led_pos==4'd1)|(mk3_led_pos==4'd4)|(mk3_led_pos==4'd7);
+  wire is_right = (mk3_led_pos==4'd3)|(mk3_led_pos==4'd6)|(mk3_led_pos==4'd9);
+  wire is_top   = (mk3_led_pos>=4'd1)&(mk3_led_pos<=4'd3);
+  wire is_bot   = (mk3_led_pos>=4'd7)&(mk3_led_pos<=4'd9);
+  wire [9:0] cl_x0 = is_left  ? CL_HM :
+                     is_right ? (le - CL_W - CL_HM) : ((le - CL_W) >> 1);
+  wire [8:0] cl_y0 = is_top   ? CL_VM :
+                     is_bot   ? (fe - CL_H - CL_VM) : ((fe - CL_H) >> 1);
+  wire in_cluster = (mk3_led_pos != 4'd0)
+                  & (ov_hx >= cl_x0) & (ov_hx < (cl_x0 + CL_W))
+                  & (ov_vy >= cl_y0) & (ov_vy < (cl_y0 + CL_H));
+  wire [9:0] ovx = ov_hx - cl_x0;   // 0..39 within cluster
+  wire [8:0] ovy = ov_vy - cl_y0;   // 0..5
+  wire in_led1  = (ovx <  10'd12);                   // LEFT  = Groups LED (mk3_leds[0])
+  wire in_led2  = (ovx >= 10'd14) & (ovx < 10'd26);  // RIGHT = Trainer LED (mk3_leds[1])
+  wire in_cells = in_led1 | in_led2;
+  wire [9:0] cell_base = in_led1 ? 10'd0 : 10'd14;
+  wire [4:0] cx = (ovx - cell_base);   // 0..11 within cell
+  wire [3:0] cy = ovy[3:0];            // 0..5
+  // Rounded frame: the top/bottom-row ends (2px) are transparent (show game).
+  wire ov_trans   = ((cy == 4'd0) | (cy == 4'd5)) & ((cx <= 5'd1) | (cx >= 5'd10));
+  wire ov_border  = ~ov_trans & ((cy == 4'd0) | (cy == 4'd5) | (cx <= 5'd1) | (cx >= 5'd10));
+  wire ov_inner   = (cy >= 4'd1) & (cy <= 4'd4) & (cx >= 5'd2) & (cx <= 5'd9);
+  wire ov_corner  = ov_inner & ((cy == 4'd1) | (cy == 4'd4)) & ((cx <= 5'd3) | (cx >= 5'd8));
+  wire ov_box_on  = in_led1 ? mk3_leds[0] : mk3_leds[1];
+
+  wire cheats_on  = (mk3_eff_mode == 2'd1);   // CHEATS_ACTIVE
+  wire ov_active  = (mk3_led_pos != 4'd0) & ov_ready & ov_have & in_cluster
+                    & in_cells & cheats_on & ~ov_trans;
+
+  reg [7:0] ov_r, ov_g, ov_b;
+  always @(*) begin
+    if (ov_border) begin               // black frame
+      ov_r = 8'h00; ov_g = 8'h00; ov_b = 8'h00;
+    end else if (ov_box_on) begin      // lit: red (dark-red inner corners)
+      ov_r = ov_corner ? 8'h80 : 8'hFF; ov_g = 8'h00; ov_b = 8'h00;
+    end else begin                     // dark: dim grey
+      ov_r = ov_corner ? 8'h22 : 8'h4C; ov_g = ov_corner ? 8'h22 : 8'h4C; ov_b = ov_corner ? 8'h22 : 8'h4C;
+    end
+  end
+
+  always @(posedge clk_sys) begin
+    if (ov_active) begin
+      video_r <= ov_r;
+      video_g <= ov_g;
+      video_b <= ov_b;
+    end else begin
+      video_r <= (LG_TARGET && lightgun_enabled) ? {8{LG_TARGET[0]}} : R;
+      video_g <= (LG_TARGET && lightgun_enabled) ? {8{LG_TARGET[1]}} : G;
+      video_b <= (LG_TARGET && lightgun_enabled) ? {8{LG_TARGET[2]}} : B;
+    end
+  end
+
+  // mk3_eff_pal: the region (P/N) LED was removed; keep the signal tied off for lint.
+  wire _unused_eff_pal = &{1'b0, mk3_eff_pal};
 
   ////////////////////////////  MEMORY  ///////////////////////////////////
 
@@ -508,16 +670,63 @@ module MAIN_SNES (
   wire [15:0] ROM_D;
   wire [15:0] ROM_Q;
 
+  // PAR MK3 BIOS in SDRAM at 0x800000-0x81FFFF (128 KB), above any cart ROM.
+  // mk3_bios_we writes from slot 100 loader; mk3_bios_read_from_main is main.v's
+  // read request. Both addresses are 17-bit, offset-added to 0x800000.
+  wire        mk3_bios_read_from_main;
+  wire [16:0] mk3_bios_read_addr_from_main;
+  wire [24:0] mk3_bios_full_addr =
+      25'h800000 + {8'b0, mk3_bios_we ? mk3_bios_load_addr : mk3_bios_read_addr_from_main};
+  wire mk3_bios_any = mk3_bios_we | mk3_bios_read_from_main;
+
+  // Pull the BIOS byte from the SDRAM 16-bit word.
+  // In byte mode (word=0), sdram.sv:123 already byte-swaps on the address LSB, so
+  // the requested byte always lands at dout[7:0] for both even and odd addresses.
+  // Every cart chip in this core picks [7:0] too (DSP_LHRomMap.vhd:280). Do NOT
+  // add a second byte-select here: that breaks odd-address reads like the reset
+  // vector at $00:FFFC/FFFD.
+  wire [7:0] mk3_bios_dout_to_main = ROM_Q[7:0];
+
+  // SDRAM has four clients, in priority order:
+  //   1. cart_download  (slot 0, write)
+  //   2. mk3_bios_we    (slot 100, write at BIOS_BASE)
+  //   3. mk3_bios_read  (SNES BIOS read in MK3 Menu mode, at BIOS_BASE)
+  //   4. SNES cart read (ROM_ADDR)
+  //
+  // Gate BIOS read by ~cart_download & ~mk3_bios_we so its rd pulse can't fire
+  // during a loader write while both loaders are active at power-on.
+  //
+  // Gate by ~ROM_OE_N to get a per-access edge. sdram.sv:83-95 edge-triggers rd
+  // on (~old_rd & rd), but mk3_bios_read_from_main (= sel_mk3_bios) stays high
+  // for the whole $xxxx:8000-FFFF region. ROM_OE_N pulses once per SYSCLK_CE (the
+  // cart chip is still active in Menu mode), so anding it in re-edges each fetch.
+  //
+  // Also gate by RESET_N to suppress BIOS-region reads during the reset window.
+  wire bios_read_gated = mk3_bios_read_from_main
+                       & ~cart_download
+                       & ~mk3_bios_we
+                       & RESET_N
+                       & ~ROM_OE_N;
+  wire bios_any_gated  = mk3_bios_we | bios_read_gated;
+
   sdram sdram (
       .init(0),  //~clock_locked),
       .clk(clk_mem),
 
-      .addr(cart_download ? ioctl_addr : ROM_ADDR),
-      .din (cart_download ? ioctl_dout : ROM_D),
+      .addr(cart_download    ? ioctl_addr
+            : bios_any_gated ? mk3_bios_full_addr
+            : {1'b0, ROM_ADDR}),
+      .din (cart_download    ? ioctl_dout
+            : mk3_bios_we    ? {mk3_bios_load_din, mk3_bios_load_din}
+            : ROM_D),
       .dout(ROM_Q),
-      .rd  (~cart_download & (RESET_N ? ~ROM_OE_N : RFSH)),
-      .wr  (cart_download ? ioctl_wr : ~ROM_WE_N),
-      .word(cart_download | ROM_WORD),
+      .rd  (bios_read_gated
+            | (~cart_download & ~mk3_bios_we & (RESET_N ? ~ROM_OE_N : RFSH))),
+      .wr  (cart_download    ? ioctl_wr
+            : mk3_bios_we    ? 1'b1
+            : ~ROM_WE_N),
+      .word(cart_download
+            | (bios_any_gated ? 1'b0 : ROM_WORD)),
       .busy(),
 
       // Actual SDRAM interface
@@ -771,6 +980,12 @@ module MAIN_SNES (
 
   wire JOY_STRB;
 
+  // Route the real mouse to the SNES port chosen by the Mouse Port setting.
+  wire        mk3_m_p1 = mk3_mouse[50] & ~mk3_mouse_port;
+  wire        mk3_m_p2 = mk3_mouse[50] &  mk3_mouse_port;
+  wire [50:0] mk3_mouse_p1 = {mk3_m_p1, mk3_mouse[49:0]};
+  wire [50:0] mk3_mouse_p2 = {mk3_m_p2, mk3_mouse[49:0]};
+
   wire [1:0] JOY1_DO_t;
   wire JOY1_CLK;
   wire JOY1_P6;
@@ -787,7 +1002,8 @@ module MAIN_SNES (
       .JOY_Y(p1_lstick_y),
 
       .DPAD_AIM_SPEED(dpad_aim_speed),
-      .MOUSE_EN(mouse_enabled)
+      .MOUSE_EN(mouse_enabled | mk3_m_p1),
+      .MOUSE_DATA(mk3_mouse_p1)
   );
 
   wire [1:0] JOY2_DO;
@@ -796,20 +1012,23 @@ module MAIN_SNES (
   ioport port2 (
       .CLK(clk_sys),
 
-      .MULTITAP(multitap_enabled),
+      .MULTITAP(multitap_enabled & ~mk3_m_p2),
 
       .PORT_LATCH(JOY_STRB),
       .PORT_CLK(JOY2_CLK),
       .PORT_P6(JOY2_P6),
       .PORT_DO(JOY2_DO),
 
-      .JOYSTICK1((joy_swap ^ raw_serial) ? joy0 : joy1),
+      // When the mouse is on SNES port 1, route player 1's pad here (port 2)
+      // so the BIOS sees the mouse and the pad at the same time.
+      .JOYSTICK1(mk3_m_p1 ? joy0 : ((joy_swap ^ raw_serial) ? joy0 : joy1)),
       .JOYSTICK2(joy2),
       .JOYSTICK3(joy3),
       // .JOYSTICK4(joy4),
 
       // .MOUSE(ps2_mouse),
-      // .MOUSE_EN(mouse_mode[1])
+      .MOUSE_EN(mk3_m_p2),
+      .MOUSE_DATA(mk3_mouse_p2)
   );
 
   wire LG_P6_out;

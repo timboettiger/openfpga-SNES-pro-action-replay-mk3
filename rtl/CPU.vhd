@@ -11,6 +11,7 @@ entity SCPU is
 		ENABLE			: in std_logic;
 		
 		CA       		: out std_logic_vector(23 downto 0);
+		CA_RAW			: out std_logic_vector(23 downto 0);   -- PAR MK3: pre-mirror address (INT_A before WRAM-mirror remap)
 		CPURD_N			: out std_logic;
 		CPUWR_N			: out std_logic;
 		
@@ -403,6 +404,14 @@ begin
 		ROMSEL_N <= '1';
 		
 		CA <= INT_A;
+		-- PAR MK3: expose the UN-mirrored address. The real MK3 PCB sits on the
+		-- cartridge edge and sees the full A0-A23 the CPU emits, BEFORE the
+		-- console remaps $00-$3F:0000-1FFF to WRAM $7E. The MK3 IO registers
+		-- live at bank $10 ($10001C control-A, $100000-1B slots) which falls in
+		-- that mirror window, so the remapped CA arrives as $7E:00xx and the MK3
+		-- decode never matches. CA_RAW carries the pre-remap address for the
+		-- MK3 snoop only; everything else keeps using CA.
+		CA_RAW <= INT_A;
 
 		if INT_A(22) = '0' then 							--$00-$3F, $80-$BF
 			if INT_A(15 downto 13) = "000" then			--$0000-$1FFF | Slow  | Address Bus A + /WRAM (mirror $7E:0000-$1FFF)

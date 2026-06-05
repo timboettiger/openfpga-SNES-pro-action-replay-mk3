@@ -31,3 +31,4 @@ set_global_assignment -name VERILOG_FILE [file join $::quartus(qip_path) MSU1/ms
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) MSU1/msu_data_store.sv ]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) RTC4513.vhd ]
 set_global_assignment -name VHDL_FILE [file join $::quartus(qip_path) SRTC.vhd ]
+set_global_assignment -name QIP_FILE [file join $::quartus(qip_path) mk3/mk3.qip ]
