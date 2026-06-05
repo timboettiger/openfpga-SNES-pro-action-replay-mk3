@@ -6,6 +6,12 @@ MK3** cheat cartridge on top of [agg23's openFPGA SNES core](https://github.com/
 The MK3 BIOS wraps a standard SNES ROM and provides the cartridge's cheat entry,
 trainer, and live cheat application.
 
+---
+
+This repository is part of the larger [Project Preservation](https://github.com/timboettiger/action-replay-mk-iii), which includes the reverse-engineering documentation, user manuals and other interesting things about the Pro Action Replay MK3 for SNES.
+
+---
+
 ## Features
 
 ### This core adds
