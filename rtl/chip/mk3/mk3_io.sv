@@ -60,7 +60,7 @@ module mk3_io (
 
     // Address decoders (combinational)
     logic is_slot;
-    logic is_ca, is_cb, is_cc, is_cd, is_led;
+    logic is_ca, is_cb, is_cc, is_cd, is_led, is_grp;
     logic [2:0] slot_index;
     logic [1:0] slot_byte;
 
@@ -71,6 +71,8 @@ module mk3_io (
         is_cc   = (cpu_addr == 24'h206000);
         is_cd   = (cpu_addr == 24'h008000);
         is_led  = (cpu_addr == 24'h086000);
+        // Live LED output ($00:61FE in MK3 SRAM); snooped, not an IO hit.
+        is_grp  = (cpu_addr == 24'h0061FE);
 
         cpu_hit = is_slot | is_ca | is_cb | is_cc | is_cd | is_led;
 
@@ -96,6 +98,11 @@ module mk3_io (
         end else begin
             cb_pulse <= 1'b0;  // default low, pulses one cycle on Control B 0->1
 
+            // LED snoop: the live group/trainer blink is at $00:61FE (the
+            // $086000 HW reg has bit0 masked at runtime). Mirror it for the
+            // overlay; kept out of the IO decode so it never claims cpu_hit.
+            if (cpu_we && is_grp) leds_r <= cpu_din;
+
             if (cpu_we) begin
                 if (is_slot) begin
                     // Update byte `slot_byte` of slot `slot_index`
@@ -117,7 +124,6 @@ module mk3_io (
                 end
                 else if (is_cc)  cc_r   <= cpu_din;
                 else if (is_cd)  cd_r   <= cpu_din;
-                else if (is_led) leds_r <= cpu_din;
             end
         end
     end
