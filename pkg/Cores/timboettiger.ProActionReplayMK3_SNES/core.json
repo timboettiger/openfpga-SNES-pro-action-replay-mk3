@@ -7,8 +7,8 @@
       "description": "Super Nintendo with Pro Action Replay MK3 hardware emulation.",
       "author": "timboettiger",
       "url": "https://github.com/timboettiger/openfpga-SNES-pro-action-replay-mk3",
-      "version": "0.5.1",
-      "date_release": "2026-06-05"
+      "version": "0.6.0",
+      "date_release": "2026-06-06"
     },
     "framework": {
       "target_product": "Analogue Pocket",
