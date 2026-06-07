@@ -201,6 +201,7 @@ module mk3_snes_top (
         .switch_pos     (bridge_switch_pos),
         .control_b      (control_b),
         .control_a      (control_a),
+        .control_c      (control_c),
         .cpu_addr       (cpu_addr),
         .sel_mk3_bios   (sel_mk3_bios),
         .sel_game_rom   (sel_game_rom),
@@ -291,7 +292,10 @@ module mk3_snes_top (
     assign sram_din    = cpu_din;
 
     // -----------------------------------------------------------------
-    // LED state to Pocket bridge (truncate to 2 bits)
+    // LED state to Pocket bridge. mk3_io's `leds` register mirrors writes to
+    // $00:61FE (the live group/trainer blink the PAR-NMI engine writes each
+    // frame; §20.3 / HW-verified §20.4); $086000 is ignored at runtime
+    // because the ROM masks its bit0 with `and #$FE`.
     // -----------------------------------------------------------------
     assign bridge_leds = leds[1:0];
 
@@ -303,6 +307,9 @@ module mk3_snes_top (
     assign dbg_effective_mode = effective_mode;
 
     // -----------------------------------------------------------------
-    // control_c, control_d are unused (kept available).
+    // control_c drives the PAR-NMI window in the mapper (above).
+    // control_d (PAR-NMI entry ACK at $008000) is latched but unused for
+    // now -- semantics from §19.6 step 4 are inferred only, and the current
+    // BIOS gate via control_c is enough to make the NMI handler run.
 
 endmodule

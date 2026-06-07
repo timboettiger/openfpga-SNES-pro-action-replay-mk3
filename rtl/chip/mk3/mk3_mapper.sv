@@ -10,6 +10,14 @@
 //   $00/02/04/06:$6000-$7FFF  -> MK3 SRAM (15-bit offset)
 //   $00-$3F:$8000-$FFFF       -> ROM (BIOS or game)
 //   $80-$BF:$8000-$FFFF       -> mirror of $00-$3F
+//
+// PAR-NMI window: in Cheats Active mode the BIOS is also visible at
+// $00/$80:AE00-$AFFF as long as Control C bit 0 = 0. The MK3 NMI hook
+// redirects the SNES NMI vector into this window ($80:AE20), and the BIOS
+// PAR-NMI handler runs there each frame. The ROM keeps Control C cleared
+// throughout this phase (§19.6 / §8.2 of the disassembly); writing a non-
+// zero value would close the window, which is how the BIOS itself returns
+// to game execution at the end of the handler (semantics inferred).
 //----------------------------------------------------------------------------
 
 module mk3_mapper (
@@ -19,6 +27,7 @@ module mk3_mapper (
     input  logic [1:0]   switch_pos,       // from Pocket bridge: 0=NoCheats 1=CheatsActive 2=MK3Menu
     input  logic         control_b,        // from mk3_io: sticky bit
     input  logic [7:0]   control_a,        // from mk3_io: bit 4 = peek game ROM
+    input  logic [7:0]   control_c,        // from mk3_io: bit 0 = BIOS/PAR-NMI vs game execution
 
     input  logic [23:0]  cpu_addr,
 
@@ -75,6 +84,11 @@ module mk3_mapper (
     wire is_fastrom_range = (cpu_addr[23:22] == 2'b10);   // banks $80-$BF
     wire is_lorom_mirror  = (cpu_addr[23:22] == 2'b00);   // banks $00-$3F
 
+    // PAR-NMI handler window: $xx:AE00-$AFFF, both in the LoROM mirror and the
+    // FastROM image. The BIOS NMI handler ($80:AE20) and its combo decoder /
+    // LED toggle code ($AE99-$AECC, $AF13-$AF49) all live here.
+    wire is_nmi_window = (cpu_addr[15:9] == 7'b1010111);  // $AE00-$AFFF
+
     logic is_mk3_bios_path;
     logic is_game_path;
     always_comb begin
@@ -83,8 +97,19 @@ module mk3_mapper (
             is_mk3_bios_path = is_fastrom_range
                              | (is_lorom_mirror & ~control_a[4]);
             is_game_path     = is_lorom_mirror & control_a[4];
+        end else if (mode == 2'd1) begin
+            // Cheats Active: game ROM, but the PAR-NMI handler window shows
+            // BIOS whenever Control C bit 0 = 0 (the BIOS asserts this on
+            // entry to the PAR-NMI). The ROM only ever writes Control C = 0;
+            // a $01-write would close the window, returning to game ROM in
+            // this region.
+            is_mk3_bios_path = is_nmi_window
+                             & (is_fastrom_range | is_lorom_mirror)
+                             & ~control_c[0];
+            is_game_path     = (is_fastrom_range | is_lorom_mirror)
+                             & ~is_mk3_bios_path;
         end else begin
-            // game running: all ROM space is game
+            // No Cheats: all ROM space is game.
             is_mk3_bios_path = 1'b0;
             is_game_path     = is_fastrom_range | is_lorom_mirror;
         end
