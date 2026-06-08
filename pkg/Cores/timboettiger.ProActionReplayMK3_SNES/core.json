@@ -4,11 +4,11 @@
     "metadata": {
       "platform_ids": ["snes"],
       "shortname": "Pro Action Replay",
-      "description": "Super Nintendo with Pro Action Replay MK3 hardware emulation.",
+      "description": "Super Nintendo with integrated Pro Action Replay MK3.",
       "author": "timboettiger",
       "url": "https://github.com/timboettiger/openfpga-SNES-pro-action-replay-mk3",
-      "version": "0.6.0",
-      "date_release": "2026-06-06"
+      "version": "0.6.1-beta2",
+      "date_release": "2026-06-08"
     },
     "framework": {
       "target_product": "Analogue Pocket",
