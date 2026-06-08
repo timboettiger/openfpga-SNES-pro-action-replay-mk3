@@ -307,9 +307,12 @@ module mk3_snes_top (
     assign dbg_effective_mode = effective_mode;
 
     // -----------------------------------------------------------------
-    // control_c drives the PAR-NMI window in the mapper (above).
-    // control_d (PAR-NMI entry ACK at $008000) is latched but unused for
-    // now -- semantics from §19.6 step 4 are inferred only, and the current
-    // BIOS gate via control_c is enough to make the NMI handler run.
+    // control_c ($206000) and control_d ($008000) are both latched in mk3_io
+    // but not used as window gates here. The PAR-NMI BIOS window in the
+    // mapper is decoded directly from cpu_addr (range $AE12-$B3F6 in Cheats
+    // Active mode); see mk3_mapper.sv for why a Control C gate would close
+    // the window mid-handler. control_c is still passed through (debug /
+    // future) and could be re-wired if a clean Datel-IC-style "BIOS owns
+    // bus" semantics with verified exit timing is ever required.
 
 endmodule
