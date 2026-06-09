@@ -1,6 +1,9 @@
 # Build and release the core on a version tag.
 #   git tag v0.3.0        && git push origin v0.3.0        -> release
 #   git tag v0.3.0-beta   && git push origin v0.3.0-beta   -> pre-release
+# The release description is generated from the commit subjects since the
+# previous tag (previous stable tag for a stable release; previous tag of any
+# kind for a pre-release). Keep commit subjects changelog-worthy.
 # Repo setting: Actions -> Workflow permissions -> "Read and write".
 name: Build & Release
 
@@ -19,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history + tags, so the changelog step can diff against the previous tag
 
       - name: Compile bitstream
         run: |
@@ -55,10 +60,52 @@ jobs:
           name: core-zip
           path: release/*.zip
 
+      - name: Generate release notes from commits
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          CURRENT="${GITHUB_REF_NAME}"
+
+          # Pick the tag to diff against:
+          #   stable (no "-")  -> the previous stable release (skip pre-releases)
+          #   pre-release      -> the immediately preceding tag of any kind
+          case "$CURRENT" in
+            *-*) PREV="$(git describe --tags --abbrev=0 "${CURRENT}^" 2>/dev/null || true)" ;;
+            *)   PREV="$(git tag --list 'v[0-9]*' --sort=-version:refname \
+                          | grep -v '[-]' | grep -vxF "$CURRENT" | head -n1)" ;;
+          esac
+
+          {
+            echo "## Pro Action Replay MK3 — ${CURRENT}"
+            echo ""
+            if [ -n "${PREV}" ]; then
+              echo "Changes since ${PREV}:"
+              echo ""
+              RANGE="${PREV}..${CURRENT}"
+            else
+              echo "Initial release."
+              echo ""
+              RANGE="${CURRENT}"
+            fi
+            # one bullet per commit subject; drop merges and version-bump
+            # noise, then collapse duplicate subjects (kept in first-seen order)
+            git log --no-merges --pretty=format:'- %s' "${RANGE}" \
+              | grep -ivE '^- (bump version|merge )' \
+              | awk '!seen[$0]++' || true
+            echo ""
+            if [ -n "${PREV}" ]; then
+              echo ""
+              echo "**Full changelog:** https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${CURRENT}"
+            fi
+          } > release_notes.md
+
+          echo "----- generated release notes -----"
+          cat release_notes.md
+
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: release/*.zip
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          body_path: release_notes.md
