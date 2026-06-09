@@ -21,6 +21,7 @@ module MAIN_SNES (
     // PAR MK3 settings (synchronized to clk_sys_21_48 by core_top.sv)
     input  wire [1:0] mk3_switch_pos,
     input  wire       mk3_soft_reset_req,
+    input  wire       mk3_reset_core,    // 1 while the "Reset Core" reset window is active
     input  wire       mk3_game_loaded,   // dataslot_allcomplete sync'd
     output wire [1:0] mk3_leds,          // driven by mk3_io's LED register
     input  wire [3:0] mk3_led_pos,       // LED overlay position: 0=hide, 1..9 = 3x3 grid
@@ -373,6 +374,7 @@ module MAIN_SNES (
       .MK3_SWITCH_POS    (mk3_switch_pos),
       .MK3_PAR_TOGGLE    (mk3_par_toggle),
       .MK3_SOFT_RESET_REQ(mk3_soft_reset_req),
+      .MK3_RESET_CORE    (mk3_reset_core),
       .MK3_GAME_LOADED   (mk3_game_loaded),
       .MK3_LEDS          (mk3_leds),
       .MK3_EFF_MODE      (mk3_eff_mode),

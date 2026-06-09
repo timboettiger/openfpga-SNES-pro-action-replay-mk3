@@ -123,6 +123,7 @@ module main #(
     input  [1:0] MK3_SWITCH_POS,
     input        MK3_PAR_TOGGLE,
     input        MK3_SOFT_RESET_REQ,
+    input        MK3_RESET_CORE,         // 1 while the "Reset Core" (0x50) reset window is active
     input        MK3_GAME_LOADED,        // 1 = all required dataslots loaded
     output [1:0] MK3_LEDS,               // {right LED, left LED} status
     output [1:0] MK3_EFF_MODE,           // effective mapper mode (0=Menu,1=Cheats,2=NoCheats)
@@ -443,7 +444,28 @@ module main #(
   reg mk3_save_restored = 1'b0;
   always @(posedge MCLK)
     if (MK3SV_WR & (MK3SV_DOUT != 8'h00)) mk3_save_restored <= 1'b1;
+
+  // "Reset Core" forces a cold boot (fresh cheat list).
+  // The user-facing "Reset Core" action (bridge $50) holds MK3_RESET_CORE high
+  // for its reset window. While a cold boot is pending we override the cookie
+  // read the OTHER way -- $6194/$6195 read as $00 (!= $ABCD) -- so the BIOS
+  // takes the cold path ($80:90B2) and wipes the $6300 list itself, exactly
+  // like a factory-fresh cartridge. This beats the warm override above.
+  //
+  // Latched, not a pulse: MK3_RESET_CORE is asserted while the SNES is held in
+  // reset (no list_write possible then); the latch persists through the BIOS
+  // re-boot until $90B2 runs and writes the list region (list_write), which is
+  // the same event the stamper keys off. Once cleared, the stamper re-stamps
+  // $ABCD into the now-empty list, so the cleared state persists as warm-boot.
+  reg mk3_force_cold = 1'b0;
+  always @(posedge MCLK) begin
+    if (MK3_RESET_CORE)  mk3_force_cold <= 1'b1;   // Reset Core pressed -> arm cold boot
+    else if (list_write) mk3_force_cold <= 1'b0;   // BIOS cold-init ran, list wiped
+  end
+
   wire [7:0] mk3_sram_dout_eff =
+      (mk3_force_cold    & mk3_sram_ce & (mk3_sram_addr == 15'h0194)) ? 8'h00 :
+      (mk3_force_cold    & mk3_sram_ce & (mk3_sram_addr == 15'h0195)) ? 8'h00 :
       (mk3_save_restored & mk3_sram_ce & (mk3_sram_addr == 15'h0194)) ? 8'hCD :
       (mk3_save_restored & mk3_sram_ce & (mk3_sram_addr == 15'h0195)) ? 8'hAB :
       mk3_sram_dout;

@@ -1028,6 +1028,9 @@ module core_top (
       // PAR MK3 (synced into clk_sys_21_48)
       .mk3_switch_pos(mk3_switch_pos_s),
       .mk3_soft_reset_req(mk3_soft_reset_req_s),
+      // "Reset Core" ($50) reset window, already synced. main.v uses it to
+      // force a cold boot so the cheat list is wiped on every core reset.
+      .mk3_reset_core(reset_button_s),
 
       // PAR MK3 BIOS loader (in clk_sys_21_48; data_loader handles its own CDC)
       .mk3_bios_we       (mk3_bios_we),
