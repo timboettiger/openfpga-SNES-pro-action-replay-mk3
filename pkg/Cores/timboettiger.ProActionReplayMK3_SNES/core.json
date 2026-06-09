@@ -4,10 +4,10 @@
     "metadata": {
       "platform_ids": ["snes"],
       "shortname": "Pro Action Replay",
-      "description": "Super Nintendo with integrated Pro Action Replay MK3.",
+      "description": "Pro Action Replay MK3 cheat device integrated with a Super Nintendo core.",
       "author": "timboettiger",
       "url": "https://github.com/timboettiger/openfpga-SNES-pro-action-replay-mk3",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "date_release": "2026-06-08"
     },
     "framework": {
