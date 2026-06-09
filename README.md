@@ -21,6 +21,10 @@ This repository is part of the larger [Project Preservation](https://github.com/
 - **Cartridge LEDs:** OSD of the cartridge's front-panel LEDs, placeable in any corner or hidden.
 - **Mouse on Analogue Dock:** an USB mouse acts as the SNES Mouse, on SNES port 1 or 2 (Mouse Port).
 
+### Different from agg23's SNES core
+
+- **Reset Core:** The core resets games by jumping back to the MK3 BIOS, which itself is being cold resetted (means: cheats and settings are cleared).
+
 ### Inherited from agg23's SNES core
 
 - SNES emulation, NTSC and PAL
@@ -35,7 +39,7 @@ This repository is part of the larger [Project Preservation](https://github.com/
 1. Extract the latest release ZIP to the root of your Pocket SD card.
 2. Place a verified 128 KB MK3 BIOS dump at
    `Assets/snes/timboettiger.Pro Action Replay/snes-pro-action-replay-mk3.bin`.
-   The BIOS is proprietary Datel firmware and is not distributed here.
+   The BIOS is proprietary Datel firmware and is not distributed here (You may search for a rom in your folder named `Pro Action Replay MK3 (Europe) (Unl).sfc` or similar and rename it to `snes-pro-action-replay-mk3.bin`).
 3. Load any SNES ROM through the Pocket UI.
 
 ## Usage
