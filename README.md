@@ -1,10 +1,10 @@
 # Pro Action Replay MK3 for Analogue Pocket
 
-A SNES core for the Analogue Pocket that emulates the Datel **Pro Action Replay
+A SNES core for the Analogue Pocket that integrates the Datel **Pro Action Replay
 MK3** cheat cartridge on top of [agg23's openFPGA SNES core](https://github.com/agg23/openfpga-SNES)
-(a port of [srg320's MiSTer SNES](https://github.com/MiSTer-devel/SNES_MiSTer)).
-The MK3 BIOS wraps a standard SNES ROM and provides the cartridge's cheat entry,
-trainer, and live cheat application.
+(a port of [srg320's MiSTer SNES](https://github.com/MiSTer-devel/SNES_MiSTer)). When the core starts, it first asks for a regular game rom. It then boots into the MK3 UI, where you can manage cheat codes, speed and trainer features. Starting the game from the UI applies the cheats and all settings. You can toggle cheats live in the openFPGA core menu. You can jump back to the MK3 UI from the core menu, too. Optional OSD shows the original cartridge's front-panel LEDs, which indicate the status of the cheat groups and trainer progress.
+
+Additionally it adds support for the SNES mouse on the Analogue Dock. Some games require the SNES mouse at port 1, while others require it at port 2. The core's *Mouse Port* option allows you to choose which one. On the go - without a USB mouse - the D-Pad emulates the SNES Mouse as intended by agg23.
 
 ---
 
@@ -16,10 +16,10 @@ This repository is part of the larger [Project Preservation](https://github.com/
 
 ### This core adds
 
-- **Pro Action Replay MK3:** boots into the Pro Action Replay UI to manage cheats and trainer functionality.
-- **Cheat List:** saved to the SD card and restored on the next launch.
+- **Pro Action Replay MK3:** Support for the Pro Action Replay MK3 bios rom.
+- **Cheat List:** Your chosen cheats are persisted using a seperate mk3sav file.
 - **Cartridge LEDs:** OSD of the cartridge's front-panel LEDs, placeable in any corner or hidden.
-- **Mouse on Analogue Dock:** an USB mouse acts as the SNES Mouse, on SNES port 1 or 2 (Mouse Port). Without one, the D-Pad or left analog stick emulates it as intended by agg.
+- **Mouse on Analogue Dock:** an USB mouse acts as the SNES Mouse, on SNES port 1 or 2 (Mouse Port).
 
 ### Inherited from agg23's SNES core
 
@@ -41,19 +41,14 @@ This repository is part of the larger [Project Preservation](https://github.com/
 ## Usage
 
 The core powers on into the MK3 BIOS, the Pro Action Replay UI. Enter codes
-there, then start the game from the BIOS menu. Two core options control it:
+there, then start the game from the BIOS menu. Three core options control it:
 
 - **Cheats / Trainer**: whether the launched game runs with cheats applied
   (can also be toggled live in-game)
 - **Pro Action Replay**: pause-menu action that jumps back into the BIOS from a
   running game, like the button on the cartridge
-
-## Controls
-
-A USB mouse on the Analogue Dock works as the SNES Mouse automatically (Mario
-Paint and similar); the **Mouse Port** option places it on SNES port 1 or 2.
-Without a USB mouse, set *Controller Options* to **Mouse** to drive the SNES
-Mouse from the D-Pad or left analog stick.
+- **Mouse Port**: any USB mouse on the Analogue Dock works as the SNES Mouse,
+  this option chooses which port is going to be used.
 
 ## Documentation
 
