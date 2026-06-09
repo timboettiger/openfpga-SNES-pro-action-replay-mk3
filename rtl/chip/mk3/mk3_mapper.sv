@@ -11,24 +11,28 @@
 //   $00-$3F:$8000-$FFFF       -> ROM (BIOS or game)
 //   $80-$BF:$8000-$FFFF       -> mirror of $00-$3F
 //
-// PAR-NMI window: in Cheats Active mode the BIOS is also visible at
-// $00/$80:AE12-$B3F6 -- the exact byte range the PAR-NMI handler may fetch.
-// The MK3 NMI hook redirects the SNES NMI vector to $80:AE12 (slots 5/6 are
-// programmed with #$AE12 at $80:912B); the handler then runs its entry, the
-// combo decoder ($AE99+), the per-frame LED engine ($AFD0-$B083), the
-// NMI exit ($B083-$B09D), and the cheat-apply / trainer-count helpers
+// PAR-NMI window: while the CPU is inside the PAR-NMI handler the BIOS is
+// visible at $00/$80:AE12-$B3F6 -- the exact byte range the handler may
+// fetch. The MK3 NMI hook redirects the SNES NMI vector to $80:AE12 (slots
+// 5/6 are programmed with #$AE12 at $80:912B); the handler then runs its
+// entry, the combo decoder ($AE99+), the per-frame LED engine ($AFD0-$B083),
+// the NMI exit ($B083-$B09D), and the cheat-apply / trainer-count helpers
 // ($B0A0-$B3F6) that the SRAM trampoline re-enters. ROM addresses outside
 // this range (below $AE12 or from $B3F7 onward) belong to unrelated routines
 // and stay on the game-ROM path.
 //
-// Gating: window is open whenever the effective mode is Cheats Active. We do
-// NOT additionally gate on Control C bit 0, even though that bit nominally
-// indicates "BIOS execution": the ROM writes Control C = 1 at $B08B, but
-// $B08F-$B09D still need to fetch BIOS (stack pops + final `jmp ($6180)`).
-// A Control C gate would close mid-handler and crash on the exit. Leaving
-// the window unconditionally open for the 1509-byte slice is the small price
-// for a clean PAR-NMI exit; game ROMs that happen to use this range are
-// inherently incompatible with the MK3 anyway.
+// CRITICAL: the window is gated by `in_par_nmi` (from mk3_nmi_hook), NOT left
+// open for all of Cheats Active mode. The $AE12-$B3F6 range sits inside the
+// LoROM $8000-$FFFF game window of every bank, so leaving it BIOS-mapped all
+// the time would shadow 1509 bytes of game ROM in every bank and the game
+// would crash on the first access there. `in_par_nmi` is set on the NMI
+// vector fetch and cleared on the handler's final jmp ($6180), so the BIOS is
+// swapped in only for the ~1 ms the handler actually runs each frame.
+//
+// We deliberately do NOT gate on Control C: the ROM writes Control C = 1 at
+// $B08B, but $B08F-$B09D still need BIOS (stack pops + the final jmp). The
+// in_par_nmi latch spans the whole handler including that exit tail and only
+// drops at the $6180 read, so the exit fetches stay on BIOS.
 //
 // Full rationale and the per-range breakdown live in §8.2 / §19.6 / §20 of
 // the action-replay-mk-iii preservaction documentation.
@@ -41,7 +45,7 @@ module mk3_mapper (
     input  logic [1:0]   switch_pos,       // from Pocket bridge: 0=NoCheats 1=CheatsActive 2=MK3Menu
     input  logic         control_b,        // from mk3_io: sticky bit
     input  logic [7:0]   control_a,        // from mk3_io: bit 4 = peek game ROM
-    input  logic [7:0]   control_c,        // from mk3_io: bit 0 = BIOS/PAR-NMI vs game execution
+    input  logic         in_par_nmi,       // from mk3_nmi_hook: 1 while inside the PAR-NMI handler
 
     input  logic [23:0]  cpu_addr,
 
@@ -116,17 +120,13 @@ module mk3_mapper (
                              | (is_lorom_mirror & ~control_a[4]);
             is_game_path     = is_lorom_mirror & control_a[4];
         end else if (mode == 2'd1) begin
-            // Cheats Active: game ROM, but the PAR-NMI handler window
-            // ($xx:AE12-$B3F6) always shows BIOS. Control C is NOT used as a
-            // gate here: the ROM writes Control C = 1 at $B08B, *before* the
-            // NMI exit finishes ($B08F-$B09D still need BIOS bytes -- stack
-            // pops and the final `jmp ($6180)`). Gating on Control C would
-            // close the window mid-routine and the CPU would read game ROM
-            // for the last 18 bytes, crashing the handler. Control C stays
-            // available to other consumers (debug / future use); leaving the
-            // window permanently open in this small range is the price for
-            // a clean NMI exit.
+            // Cheats Active: game ROM everywhere, EXCEPT while the PAR-NMI
+            // handler is running -- then the $AE12-$B3F6 window shows BIOS.
+            // Gating on in_par_nmi (not just the address range) is essential:
+            // this range overlaps the game's own LoROM $8000-$FFFF space, so
+            // an always-open window would shadow game ROM and crash the game.
             is_mk3_bios_path = is_nmi_window
+                             & in_par_nmi
                              & (is_fastrom_range | is_lorom_mirror);
             is_game_path     = (is_fastrom_range | is_lorom_mirror)
                              & ~is_mk3_bios_path;

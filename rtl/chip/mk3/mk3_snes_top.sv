@@ -97,6 +97,7 @@ module mk3_snes_top (
     logic [7:0]  intercept_data;
     logic        nmi_hit;
     logic [7:0]  nmi_data;
+    logic        in_par_nmi;       // 1 while inside the PAR-NMI handler (from nmi_hook)
 
     logic        force_cb, clear_cb;
     logic [1:0]  fsm_state;
@@ -201,7 +202,7 @@ module mk3_snes_top (
         .switch_pos     (bridge_switch_pos),
         .control_b      (control_b),
         .control_a      (control_a),
-        .control_c      (control_c),
+        .in_par_nmi     (in_par_nmi),
         .cpu_addr       (cpu_addr),
         .sel_mk3_bios   (sel_mk3_bios),
         .sel_game_rom   (sel_game_rom),
@@ -244,7 +245,8 @@ module mk3_snes_top (
         .slot5          (slot5),
         .slot6          (slot6),
         .hit            (nmi_hit),
-        .override_byte  (nmi_data)
+        .override_byte  (nmi_data),
+        .in_par_nmi     (in_par_nmi)
     );
 
     // -----------------------------------------------------------------
@@ -307,12 +309,12 @@ module mk3_snes_top (
     assign dbg_effective_mode = effective_mode;
 
     // -----------------------------------------------------------------
-    // control_c ($206000) and control_d ($008000) are both latched in mk3_io
-    // but not used as window gates here. The PAR-NMI BIOS window in the
-    // mapper is decoded directly from cpu_addr (range $AE12-$B3F6 in Cheats
-    // Active mode); see mk3_mapper.sv for why a Control C gate would close
-    // the window mid-handler. control_c is still passed through (debug /
-    // future) and could be re-wired if a clean Datel-IC-style "BIOS owns
-    // bus" semantics with verified exit timing is ever required.
+    // control_c ($206000) and control_d ($008000) are latched in mk3_io but
+    // currently unused. The PAR-NMI BIOS window in the mapper is gated by
+    // in_par_nmi (from mk3_nmi_hook), which spans the whole handler including
+    // the exit tail -- a Control C gate would close the window at $B08B,
+    // before the exit finishes. control_c/control_d stay exported for debug /
+    // future use.
+    wire _unused_ctrl = &{1'b0, control_c, control_d};
 
 endmodule
