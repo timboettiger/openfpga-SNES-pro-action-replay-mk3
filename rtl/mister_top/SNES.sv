@@ -371,6 +371,10 @@ module MAIN_SNES (
   ) main (
       .RESET_N(RESET_N),
 
+      // savestate: freeze the SNES while the ss_spike master walks state
+      // (ss_busy and the core are both in the clk_sys domain -> no CDC).
+      .SS_PAUSE(ss_busy),
+
       .MCLK(clk_sys),  // 21.47727 / 21.28137
       .ACLK(clk_sys),
 
