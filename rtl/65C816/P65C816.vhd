@@ -28,9 +28,11 @@ entity P65C816 is
 		  -- so loading wins over the EN-gated normal updates. Byte layout (LSB
 		  -- first): A,X,Y,SP,D,T (16b each), DR(8), P(9 -> 2 bytes), PBR(8),
 		  -- DBR(8), padding to 192b. PC/IR/microcode/interrupt state not yet here.
+		  -- Inputs default to inert so other P65C816 instances that don't drive
+		  -- them (e.g. the SA-1 coprocessor's internal 65C816, SA1.vhd) stay valid.
 		  SS_REG_DO   : out std_logic_vector(191 downto 0);
-		  SS_REG_DI   : in  std_logic_vector(191 downto 0);
-		  SS_REG_LOAD : in  std_logic
+		  SS_REG_DI   : in  std_logic_vector(191 downto 0) := (others => '0');
+		  SS_REG_LOAD : in  std_logic := '0'
     );
 end P65C816;
 
