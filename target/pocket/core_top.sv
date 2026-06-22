@@ -342,6 +342,11 @@ module core_top (
     if (bridge_addr[31:28] == 4'h4) begin
       bridge_rd_data <= mk3sv_read_data;
     end
+
+    // SPIKE: savestate read-back stream (region 0x5xxxxxxx, savestate_addr).
+    if (bridge_addr[31:28] == 4'h5) begin
+      bridge_rd_data <= save_state_bridge_read_data;
+    end
   end
 
   always @(posedge clk_74a) begin
@@ -456,10 +461,13 @@ module core_top (
 
   wire dataslot_allcomplete;
 
-  wire savestate_supported = 0;
-  wire [31:0] savestate_addr;
-  wire [31:0] savestate_size;
-  wire [31:0] savestate_maxloadsize;
+  // SPIKE: savestate enabled for the feasibility spike. Streams over APF bridge
+  // region 0x5xxxxxxx because 0x4xxxxxxx is already the "MK3 Cheats" slot. Size =
+  // 1 header word + 8192 VRAM words = 8193 * 8 bytes = 0x10008 (see ss_spike.sv).
+  wire savestate_supported = 1;
+  wire [31:0] savestate_addr = 32'h50000000;
+  wire [31:0] savestate_size = 32'h00010008;
+  wire [31:0] savestate_maxloadsize = savestate_size + 32'h1000;
 
   wire savestate_start;
   wire savestate_start_ack;
@@ -543,6 +551,61 @@ module core_top (
       .datatable_wren(datatable_wren),
       .datatable_data(datatable_data),
       .datatable_q   (datatable_q)
+  );
+
+  // ===========================================================================
+  // SPIKE: Savestate / Sleep
+  // ===========================================================================
+  // Wires the previously-dead save_state_controller to the SNES core's ss_spike
+  // master. The APF host streams savestate bytes over bridge region 0x5xxxxxxx;
+  // the controller drives ss_save/ss_load and the ss data bus (clk_sys_21_48).
+  wire        ss_save;
+  wire        ss_load;
+  wire        ss_busy;
+  wire        ss_req;
+  wire        ss_ack;
+  wire [63:0] ss_din;
+  wire [63:0] ss_dout;
+  wire [25:0] ss_addr;
+  wire        ss_rnw;
+  wire [7:0]  ss_be;
+
+  wire [31:0] save_state_bridge_read_data;
+
+  save_state_controller save_state_controller (
+      .clk_74a      (clk_74a),
+      .clk_mem_85_9 (clk_mem_85_9),
+      .clk_ppu_21_47(clk_sys_21_48),
+
+      .bridge_wr                  (bridge_wr),
+      .bridge_rd                  (bridge_rd),
+      .bridge_endian_little       (bridge_endian_little),
+      .bridge_addr                (bridge_addr),
+      .bridge_wr_data             (bridge_wr_data),
+      .save_state_bridge_read_data(save_state_bridge_read_data),
+
+      .savestate_load        (savestate_load),
+      .savestate_load_ack_s  (savestate_load_ack),
+      .savestate_load_busy_s (savestate_load_busy),
+      .savestate_load_ok_s   (savestate_load_ok),
+      .savestate_load_err_s  (savestate_load_err),
+
+      .savestate_start       (savestate_start),
+      .savestate_start_ack_s (savestate_start_ack),
+      .savestate_start_busy_s(savestate_start_busy),
+      .savestate_start_ok_s  (savestate_start_ok),
+      .savestate_start_err_s (savestate_start_err),
+
+      .ss_save(ss_save),
+      .ss_load(ss_load),
+      .ss_din (ss_din),
+      .ss_dout(ss_dout),
+      .ss_addr(ss_addr),
+      .ss_rnw (ss_rnw),
+      .ss_req (ss_req),
+      .ss_be  (ss_be),
+      .ss_ack (ss_ack),
+      .ss_busy(ss_busy)
   );
 
   reg ioctl_download = 0;
@@ -1184,7 +1247,19 @@ module core_top (
 
       // Audio
       .audio_l(audio_l),
-      .audio_r(audio_r)
+      .audio_r(audio_r),
+
+      // SPIKE: savestate bus (clk_sys_21_48 domain)
+      .ss_save(ss_save),
+      .ss_load(ss_load),
+      .ss_busy(ss_busy),
+      .ss_req (ss_req),
+      .ss_ack (ss_ack),
+      .ss_din (ss_din),
+      .ss_dout(ss_dout),
+      .ss_addr(ss_addr),
+      .ss_rnw (ss_rnw),
+      .ss_be  (ss_be)
   );
 
   // Video

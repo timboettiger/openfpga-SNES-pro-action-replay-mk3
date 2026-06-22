@@ -38,6 +38,13 @@ module save_state_controller (
 
     input wire ss_busy
 );
+  // SPIKE: APF bridge region nibble used for savestate streaming. The agg23
+  // template hardcodes 4'h4, but in this MK3 fork 0x4xxxxxxx is already taken by
+  // the "MK3 Cheats" data slot (data.json id 11, core_top.sv bridge_rd_data mux).
+  // Move savestate to the free 0x5xxxxxxx region; savestate_addr in core_top must
+  // match (0x50000000).
+  localparam [3:0] SS_REGION = 4'h5;
+
   wire savestate_load_s;
   wire savestate_start_s;
 
@@ -116,7 +123,7 @@ module save_state_controller (
       .rdclk(clk_ppu_21_47),
       .rdreq(fifo_load_read_req),
       .wrclk(clk_74a),
-      .wrreq(bridge_wr && bridge_addr[31:28] == 4'h4),
+      .wrreq(bridge_wr && bridge_addr[31:28] == SS_REGION),
       .q(fifo_load_dout),
       .rdempty(fifo_load_empty),
       .aclr(fifo_load_clr)
@@ -173,7 +180,7 @@ module save_state_controller (
   reg [1:0] save_read_state = NONE;
 
   wire [27:0] bridge_save_addr = bridge_addr[27:0];
-  wire bridge_save_rd = bridge_rd && bridge_addr[31:28] == 4'h4;
+  wire bridge_save_rd = bridge_rd && bridge_addr[31:28] == SS_REGION;
 
   localparam SAVE_READ_REQ = 1;
 

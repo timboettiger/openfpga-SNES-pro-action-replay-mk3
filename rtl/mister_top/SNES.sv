@@ -176,7 +176,20 @@ module MAIN_SNES (
 
     // Audio
     output wire [15:0] audio_l,
-    output wire [15:0] audio_r
+    output wire [15:0] audio_r,
+
+    // SPIKE: savestate bus to save_state_controller (clk_sys_21_48 domain).
+    // Feasibility spike only -- serializes VRAM, not chip registers.
+    input  wire        ss_save,
+    input  wire        ss_load,
+    output wire        ss_busy,
+    output wire        ss_req,
+    input  wire        ss_ack,
+    output wire [63:0] ss_din,
+    input  wire [63:0] ss_dout,
+    output wire [25:0] ss_addr,
+    output wire        ss_rnw,
+    output wire [7:0]  ss_be
 );
   parameter USE_CX4 = 1'b0;
   parameter USE_SDD1 = 1'b0;
@@ -791,6 +804,24 @@ module MAIN_SNES (
       .cram_lb_n(cram0_lb_n)
   );
 
+  // SPIKE: VRAM port-B is shared between the existing RAM-clear walker
+  // (clearing_ram, write-only, data 0) and the savestate tap (ss_spike). They are
+  // mutually exclusive in time -- clearing happens at ROM load, savestate during
+  // gameplay -- and clearing is given priority below.
+  wire [14:0] ss_vram_addr;
+  wire        ss_vram_sel2;
+  wire        ss_vram_wren;
+  wire [7:0]  ss_vram_wdata;
+  wire [7:0]  vram1_ss_q;
+  wire [7:0]  vram2_ss_q;
+
+  wire [14:0] vram1_portb_addr  = clearing_ram ? mem_fill_addr[14:0] : ss_vram_addr;
+  wire        vram1_portb_wren  = clearing_ram ? 1'b1 : (ss_vram_wren & ~ss_vram_sel2);
+  wire [7:0]  vram1_portb_data  = clearing_ram ? 8'h00 : ss_vram_wdata;
+  wire [14:0] vram2_portb_addr  = clearing_ram ? mem_fill_addr[14:0] : ss_vram_addr;
+  wire        vram2_portb_wren  = clearing_ram ? 1'b1 : (ss_vram_wren & ss_vram_sel2);
+  wire [7:0]  vram2_portb_data  = clearing_ram ? 8'h00 : ss_vram_wdata;
+
   wire [15:0] VRAM1_ADDR;
   wire        VRAM1_WE_N;
   wire [7:0] VRAM1_D, VRAM1_Q;
@@ -801,9 +832,11 @@ module MAIN_SNES (
       .wren_a(~VRAM1_WE_N),
       .q_a(VRAM1_Q),
 
-      // clear the RAM on loading
-      .address_b(mem_fill_addr[14:0]),
-      .wren_b(clearing_ram)
+      // port B: RAM clear (load) OR savestate tap (ss_spike)
+      .address_b(vram1_portb_addr),
+      .data_b(vram1_portb_data),
+      .wren_b(vram1_portb_wren),
+      .q_b(vram1_ss_q)
   );
 
   wire [15:0] VRAM2_ADDR;
@@ -816,9 +849,34 @@ module MAIN_SNES (
       .wren_a(~VRAM2_WE_N),
       .q_a(VRAM2_Q),
 
-      // clear the RAM on loading
-      .address_b(mem_fill_addr[14:0]),
-      .wren_b(clearing_ram)
+      // port B: RAM clear (load) OR savestate tap (ss_spike)
+      .address_b(vram2_portb_addr),
+      .data_b(vram2_portb_data),
+      .wren_b(vram2_portb_wren),
+      .q_b(vram2_ss_q)
+  );
+
+  // SPIKE: savestate bus master (serializes the 64 KB VRAM only).
+  ss_spike ss_spike_inst (
+      .clk(clk_sys),
+
+      .ss_save(ss_save),
+      .ss_load(ss_load),
+      .ss_busy(ss_busy),
+      .ss_req (ss_req),
+      .ss_ack (ss_ack),
+      .ss_din (ss_din),
+      .ss_dout(ss_dout),
+      .ss_addr(ss_addr),
+      .ss_rnw (ss_rnw),
+      .ss_be  (ss_be),
+
+      .ss_vram_addr (ss_vram_addr),
+      .ss_vram_sel2 (ss_vram_sel2),
+      .ss_vram_wren (ss_vram_wren),
+      .ss_vram_wdata(ss_vram_wdata),
+      .vram1_q(vram1_ss_q),
+      .vram2_q(vram2_ss_q)
   );
 
   wire [15:0] ARAM_ADDR;
