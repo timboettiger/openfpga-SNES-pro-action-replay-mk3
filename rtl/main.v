@@ -16,6 +16,11 @@ module main #(
     // while registers/RAM hold, so a savestate captures/restores a stopped core.
     input SS_PAUSE,
 
+    // Savestate: 65C816 register vector pass-through (SNES.vhd <-> ss_spike)
+    output [191:0] SS_REG_DO,
+    input  [191:0] SS_REG_DI,
+    input          SS_REG_LOAD,
+
     input MCLK,
     input ACLK,
 
@@ -330,7 +335,11 @@ module main #(
       .turbo(TURBO),
 
       .audio_l(AUDIO_L),
-      .audio_r(AUDIO_R)
+      .audio_r(AUDIO_R),
+
+      .ss_reg_do(SS_REG_DO),
+      .ss_reg_di(SS_REG_DI),
+      .ss_reg_load(SS_REG_LOAD)
   );
 
   // PAR MK3 SNES wrapper instantiation.

@@ -22,7 +22,15 @@ entity P65C816 is
 		  VPA 		: out std_logic;
 		  VDA 		: out std_logic;
 		  MLB 		: out std_logic;
-		  VPB 		: out std_logic
+		  VPB 		: out std_logic;
+		  -- Savestate: architectural register vector out, and load-in vector +
+		  -- pulse. SS_REG_LOAD is asserted only while the core is paused (ENABLE=0),
+		  -- so loading wins over the EN-gated normal updates. Byte layout (LSB
+		  -- first): A,X,Y,SP,D,T (16b each), DR(8), P(9 -> 2 bytes), PBR(8),
+		  -- DBR(8), padding to 192b. PC/IR/microcode/interrupt state not yet here.
+		  SS_REG_DO   : out std_logic_vector(191 downto 0);
+		  SS_REG_DI   : in  std_logic_vector(191 downto 0);
+		  SS_REG_LOAD : in  std_logic
     );
 end P65C816;
 
@@ -75,7 +83,22 @@ architecture rtl of P65C816 is
 	
 begin
 	EN <= RDY_IN and CE and not WAIExec and not STPExec;
-	
+
+	-- Savestate register vector (must match SS_REG_DI slices in the load branches).
+	-- byte0..: A,X,Y,SP,D,T,DR, P(low8),P(bit8), PBR,DBR, pad to 192b.
+	SS_REG_DO <= x"00000000000000" &       -- 56b padding (bits 191..136)
+	             DBR &                      -- 135..128
+	             PBR &                      -- 127..120
+	             "0000000" & P(8) &         -- 119..112
+	             P(7 downto 0) &            -- 111..104
+	             DR &                       -- 103..96
+	             T &                        -- 95..80
+	             D &                        -- 79..64
+	             SP &                       -- 63..48
+	             Y &                        -- 47..32
+	             X &                        -- 31..16
+	             A;                         -- 15..0
+
 	IsBranchCycle1 <= '1' when IR(4 downto 0) = "10000" and STATE = "0001" else '0';
 	process(IR, P)
 	begin
@@ -265,7 +288,12 @@ begin
 			SP <= x"0100";
 			oldXF <= '1';
 		elsif rising_edge(CLK) then
-			if (IR = x"FB" and P(0) = '1' and MC.LOAD_P = "101") then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				A  <= SS_REG_DI(15 downto 0);
+				X  <= SS_REG_DI(31 downto 16);
+				Y  <= SS_REG_DI(47 downto 32);
+				SP <= SS_REG_DI(63 downto 48);
+			elsif (IR = x"FB" and P(0) = '1' and MC.LOAD_P = "101") then
 				X(15 downto 8) <= x"00";
 				Y(15 downto 8) <= x"00";
 				SP(15 downto 8) <= x"01";
@@ -354,7 +382,9 @@ begin
 		if RST_N = '0' then
 			P <= "100110100";
 		elsif rising_edge(CLK) then
-			if EN = '1' then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				P <= SS_REG_DI(112 downto 104);
+			elsif EN = '1' then
 				case MC.LOAD_P is
 					when "000" => P <= P;
 					when "001" => 
@@ -405,7 +435,13 @@ begin
 			PBR <= (others=>'0');
 			DBR <= (others=>'0');
 		elsif rising_edge(CLK) then
-			if EN = '1' then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				T   <= SS_REG_DI(95 downto 80);
+				DR  <= SS_REG_DI(103 downto 96);
+				D   <= SS_REG_DI(79 downto 64);
+				PBR <= SS_REG_DI(127 downto 120);
+				DBR <= SS_REG_DI(135 downto 128);
+			elsif EN = '1' then
 				DR <= D_IN;
 				
 				case MC.LOAD_T is

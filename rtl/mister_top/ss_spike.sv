@@ -24,7 +24,13 @@
 //         ss_dout; after the last word drop ss_busy.
 // =============================================================================
 
-module ss_spike (
+module ss_spike #(
+    // Register region: REG_BYTES bytes (must be a multiple of 8 so the flat space
+    // stays 8-byte aligned). 24 bytes = 192 bits covers the 65C816 architectural
+    // registers serialized so far (A/X/Y/SP/D/T/DR/P/PBR/DBR); padded.
+    parameter integer REG_BYTES = 24,
+    parameter integer REG_BITS  = REG_BYTES * 8
+) (
     input  wire        clk,            // clk_sys_21_48
 
     // APF savestate bus (save_state_controller)
@@ -54,14 +60,25 @@ module ss_spike (
     output reg  [16:0] dma_addr,       // byte address within the bank
     output reg  [7:0]  dma_wdata,
     input  wire        dma_done,
-    input  wire [7:0]  dma_rdata
+    input  wire [7:0]  dma_rdata,
+
+    // Chip register state (flat vector; layout defined by the chips). Captured
+    // as the last bytes of the flat space. On load, ss_reg_di is filled byte by
+    // byte and ss_reg_load pulses once afterwards so the chips latch it (while the
+    // core is still paused). clk_sys domain, no CDC.
+    input  wire [REG_BITS-1:0] ss_reg_do,
+    output reg  [REG_BITS-1:0] ss_reg_di,
+    output reg                 ss_reg_load
 );
 
-  // Flat byte map. 0x40000 bytes / 8 = 0x8000 payload words; word 0 is the header.
-  localparam [17:0] VRAM_END  = 18'h10000;  // end of VRAM / start of WRAM
-  localparam [17:0] WRAM_END  = 18'h30000;  // end of WRAM / start of ARAM
-  localparam [15:0] LAST_WORD = 16'h8000;   // 32768 payload words
-  localparam [63:0] SS_MAGIC  = 64'h5350_494B_4532_0001;  // "SPIKE2" + version 1
+  // Flat byte map (8 bytes per ss word; word 0 is a header):
+  //   VRAM 0x00000..0x0FFFF | WRAM 0x10000..0x2FFFF | ARAM 0x30000..0x3FFFF
+  //   | chip registers 0x40000..(0x40000+REG_BYTES-1)
+  localparam [18:0] VRAM_END  = 19'h10000;  // end of VRAM / start of WRAM
+  localparam [18:0] WRAM_END  = 19'h30000;  // end of WRAM / start of ARAM
+  localparam [18:0] REG_START = 19'h40000;  // start of the chip-register region
+  localparam [15:0] LAST_WORD = 16'h8000 + 16'(REG_BYTES / 8);  // total bytes / 8
+  localparam [63:0] SS_MAGIC  = 64'h5350_494B_4533_0001;  // "SPIKE3" + version 1
 
   // The controller ignores these; drive constants so they never float.
   assign ss_addr = 26'd0;
@@ -93,17 +110,19 @@ module ss_spike (
 
   reg prev_save, prev_load;
 
-  // Flat byte address of the current (word, byte). Payload words are 1..32768,
+  // Flat byte address of the current (word, byte). Payload words are 1..LAST_WORD,
   // so the byte base is (word_idx-1)*8.
-  wire [14:0] payload_word = word_idx[14:0] - 15'd1;
-  wire [17:0] base_byte    = {payload_word, 3'd0};
-  wire [17:0] gbyte        = base_byte + {15'd0, byte_idx};
+  wire [15:0] payload_word = word_idx - 16'd1;
+  wire [18:0] base_byte    = {payload_word, 3'd0};
+  wire [18:0] gbyte        = base_byte + {16'd0, byte_idx};
 
   // Region decode (valid only while gathering/scattering a payload byte)
   wire        in_vram    = gbyte < VRAM_END;
-  wire        in_aram    = gbyte >= WRAM_END;
+  wire        in_reg     = gbyte >= REG_START;
+  wire        in_aram    = (gbyte >= WRAM_END) && (gbyte < REG_START);  // else WRAM
   wire [16:0] local_addr = in_aram ? (gbyte[16:0] - WRAM_END[16:0])
                                    : (gbyte[16:0] - VRAM_END[16:0]);
+  wire [4:0]  reg_off    = gbyte[4:0];  // 0..REG_BYTES-1 (REG_START low bits are 0)
 
   always @(posedge clk) begin
     prev_save <= ss_save;
@@ -112,6 +131,7 @@ module ss_spike (
     // default one-cycle strobes
     ss_req       <= 1'b0;
     ss_vram_wren <= 1'b0;
+    ss_reg_load  <= 1'b0;
 
     case (st)
       IDLE: begin
@@ -152,6 +172,10 @@ module ss_spike (
           ss_vram_sel2 <= gbyte[15];
           wait_cnt     <= 2'd0;
           st           <= S_VWAIT;
+        end else if (in_reg) begin
+          // chip register byte: combinational, no wait
+          wbuf[byte_idx*8 +: 8] <= ss_reg_do[reg_off*8 +: 8];
+          st <= S_NEXT;
         end else begin
           dma_req  <= 1'b1;
           dma_rnw  <= 1'b1;
@@ -211,6 +235,12 @@ module ss_spike (
           ss_vram_wdata <= wbuf[byte_idx*8 +: 8];
           ss_vram_wren  <= 1'b1;
           st            <= L_VWR;
+        end else if (in_reg) begin
+          // chip register byte: write into ss_reg_di; after the last byte pulse
+          // ss_reg_load so the chips latch the whole vector (core still paused).
+          ss_reg_di[reg_off*8 +: 8] <= wbuf[byte_idx*8 +: 8];
+          if (reg_off == 5'(REG_BYTES - 1)) ss_reg_load <= 1'b1;
+          st <= L_NEXT;
         end else begin
           dma_req   <= 1'b1;
           dma_rnw   <= 1'b0;

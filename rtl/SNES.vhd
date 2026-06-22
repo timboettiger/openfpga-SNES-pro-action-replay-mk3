@@ -102,7 +102,12 @@ entity SNES is
 		DBG_CPU_EN	: in std_logic;
 
 		AUDIO_L		: out std_logic_vector(15 downto 0);
-		AUDIO_R		: out std_logic_vector(15 downto 0)
+		AUDIO_R		: out std_logic_vector(15 downto 0);
+
+		-- Savestate: 65C816 register vector (pass-through to ss_spike via main.v)
+		SS_REG_DO	: out std_logic_vector(191 downto 0);
+		SS_REG_DI	: in  std_logic_vector(191 downto 0);
+		SS_REG_LOAD	: in  std_logic
 	);
 end SNES;
 
@@ -236,7 +241,11 @@ begin
 		JOY2_CLK		=> JOY2_CLK,
 
 		TURBO			=> TURBO,
-		DBG_CPU_EN	=> DBG_CPU_EN
+		DBG_CPU_EN	=> DBG_CPU_EN,
+
+		SS_REG_DO	=> SS_REG_DO,
+		SS_REG_DI	=> SS_REG_DI,
+		SS_REG_LOAD	=> SS_REG_LOAD
 	);
 
 	BUSA_SEL <= '1' when INT_CA(22) = '0' and INT_CA(15 downto 8) /= x"21" else

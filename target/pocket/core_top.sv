@@ -463,11 +463,12 @@ module core_top (
 
   // Savestate enabled. Streams over APF bridge region 0x5xxxxxxx because
   // 0x4xxxxxxx is already the "MK3 Cheats" slot. Size = 1 header word + RAM
-  // payload (VRAM 64K + WRAM 128K + ARAM 64K = 256K bytes = 32768 words) =
-  // 32769 * 8 bytes = 0x40008 (see ss_spike.sv). Chip registers not yet included.
+  // payload (VRAM 64K + WRAM 128K + ARAM 64K = 0x40000 bytes) + 24 bytes of
+  // 65C816 registers = 0x40018 bytes => 32772 words => 0x40020 (see ss_spike.sv).
+  // Only the 65C816 architectural registers are captured so far (no PPU/SMP/DSP).
   wire savestate_supported = 1;
   wire [31:0] savestate_addr = 32'h50000000;
-  wire [31:0] savestate_size = 32'h00040008;
+  wire [31:0] savestate_size = 32'h00040020;
   wire [31:0] savestate_maxloadsize = savestate_size + 32'h1000;
 
   wire savestate_start;

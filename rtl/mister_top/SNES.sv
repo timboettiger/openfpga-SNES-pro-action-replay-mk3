@@ -375,6 +375,11 @@ module MAIN_SNES (
       // (ss_busy and the core are both in the clk_sys domain -> no CDC).
       .SS_PAUSE(ss_busy),
 
+      // savestate: 65C816 register vector (out = chip state, in = state to load)
+      .SS_REG_DO(cpu_ss_reg_do),
+      .SS_REG_DI(ss_reg_di),
+      .SS_REG_LOAD(ss_reg_load),
+
       .MCLK(clk_sys),  // 21.47727 / 21.28137
       .ACLK(clk_sys),
 
@@ -795,6 +800,13 @@ module MAIN_SNES (
   wire        dma_sel_wram = ss_busy & ~dma_bank;
   wire        dma_sel_aram = ss_busy &  dma_bank;
 
+  // savestate: 65C816 register vector between SNES.vhd (via main) and ss_spike.
+  // clk_sys domain, no CDC. cpu_ss_reg_do = chip state out, ss_reg_di = state to
+  // load, ss_reg_load = latch pulse.
+  wire [191:0] cpu_ss_reg_do;
+  wire [191:0] ss_reg_di;
+  wire         ss_reg_load;
+
   psram #(
       .CLOCK_SPEED(85.9)
   ) wram (
@@ -910,7 +922,12 @@ module MAIN_SNES (
       .dma_addr (dma_addr),
       .dma_wdata(dma_wdata),
       .dma_done (dma_done),
-      .dma_rdata(dma_rdata)
+      .dma_rdata(dma_rdata),
+
+      // chip register vector (65C816 so far)
+      .ss_reg_do  (cpu_ss_reg_do),
+      .ss_reg_di  (ss_reg_di),
+      .ss_reg_load(ss_reg_load)
   );
 
   wire [15:0] ARAM_ADDR;
