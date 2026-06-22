@@ -776,6 +776,25 @@ module MAIN_SNES (
 
   assign WRAM_Q = psram_wram_addr[0] ? wram_data_out[15:8] : wram_data_out[7:0];
 
+  // ===========================================================================
+  // savestate PSRAM DMA (clk_sys <-> clk_mem). ss_spike issues clk_sys byte
+  // requests; ss_psram_dma crosses to clk_mem and drives the chosen psram. While
+  // ss_busy, the addressed psram is muxed to the DMA and the other is forced idle
+  // (read_en/write_en 0) so a frozen-active SNES CE cannot trigger spurious access.
+  // ===========================================================================
+  wire        dma_req, dma_rnw, dma_bank;
+  wire [16:0] dma_addr;
+  wire [7:0]  dma_wdata, dma_rdata;
+  wire        dma_done;
+  wire [15:0] dma_ps_word_addr;
+  wire        dma_ps_rd, dma_ps_wr;
+  wire [15:0] dma_ps_data_in;
+  wire        dma_ps_whb, dma_ps_wlb;
+  wire        wram_busy, wram_read_avail;
+  wire        aram_busy, aram_read_avail;
+  wire        dma_sel_wram = ss_busy & ~dma_bank;
+  wire        dma_sel_aram = ss_busy &  dma_bank;
+
   psram #(
       .CLOCK_SPEED(85.9)
   ) wram (
@@ -783,15 +802,17 @@ module MAIN_SNES (
 
       .bank_sel(0),
       // Remove bottom most bit, since this is a 8bit address and the RAM wants a 16bit address
-      .addr(psram_wram_addr[16:1]),
+      .addr(dma_sel_wram ? dma_ps_word_addr : psram_wram_addr[16:1]),
 
-      .write_en(clearing_ram ? 1'b1 : ~WRAM_CE_N & ~WRAM_WE_N),
-      .data_in(wram_data_in),
-      .write_high_byte(psram_wram_addr[0]),
-      .write_low_byte(~psram_wram_addr[0]),
+      .write_en(dma_sel_wram ? dma_ps_wr : (ss_busy ? 1'b0 : (clearing_ram ? 1'b1 : ~WRAM_CE_N & ~WRAM_WE_N))),
+      .data_in(dma_sel_wram ? dma_ps_data_in : wram_data_in),
+      .write_high_byte(dma_sel_wram ? dma_ps_whb : psram_wram_addr[0]),
+      .write_low_byte(dma_sel_wram ? dma_ps_wlb : ~psram_wram_addr[0]),
 
-      .read_en (clearing_ram ? 1'b0 : ~WRAM_CE_N & ~WRAM_OE_N),
+      .read_en (dma_sel_wram ? dma_ps_rd : (ss_busy ? 1'b0 : (clearing_ram ? 1'b0 : ~WRAM_CE_N & ~WRAM_OE_N))),
       .data_out(wram_data_out),
+      .busy(wram_busy),
+      .read_avail(wram_read_avail),
 
       // Actual PSRAM interface
       .cram_a(cram0_a),
@@ -880,7 +901,16 @@ module MAIN_SNES (
       .ss_vram_wren (ss_vram_wren),
       .ss_vram_wdata(ss_vram_wdata),
       .vram1_q(vram1_ss_q),
-      .vram2_q(vram2_ss_q)
+      .vram2_q(vram2_ss_q),
+
+      // PSRAM byte DMA handshake (WRAM/ARAM)
+      .dma_req  (dma_req),
+      .dma_rnw  (dma_rnw),
+      .dma_bank (dma_bank),
+      .dma_addr (dma_addr),
+      .dma_wdata(dma_wdata),
+      .dma_done (dma_done),
+      .dma_rdata(dma_rdata)
   );
 
   wire [15:0] ARAM_ADDR;
@@ -905,15 +935,17 @@ module MAIN_SNES (
 
       .bank_sel(0),
       // Remove bottom most bit, since this is a 8bit address and the RAM wants a 16bit address
-      .addr(psram_aram_addr[15:1]),
+      .addr(dma_sel_aram ? dma_ps_word_addr[14:0] : psram_aram_addr[15:1]),
 
-      .write_en(clearing_ram ? 1'b1 : ~ARAM_CE_N & ~ARAM_WE_N),
-      .data_in(aram_16_data),
-      .write_high_byte(psram_aram_addr[0]),
-      .write_low_byte(~psram_aram_addr[0]),
+      .write_en(dma_sel_aram ? dma_ps_wr : (ss_busy ? 1'b0 : (clearing_ram ? 1'b1 : ~ARAM_CE_N & ~ARAM_WE_N))),
+      .data_in(dma_sel_aram ? dma_ps_data_in : aram_16_data),
+      .write_high_byte(dma_sel_aram ? dma_ps_whb : psram_aram_addr[0]),
+      .write_low_byte(dma_sel_aram ? dma_ps_wlb : ~psram_aram_addr[0]),
 
-      .read_en (~ARAM_CE_N & ~ARAM_OE_N),
+      .read_en (dma_sel_aram ? dma_ps_rd : (ss_busy ? 1'b0 : (~ARAM_CE_N & ~ARAM_OE_N))),
       .data_out(aram_16_out),
+      .busy(aram_busy),
+      .read_avail(aram_read_avail),
 
       // Actual PSRAM interface
       .cram_a(cram1_a),
@@ -928,6 +960,32 @@ module MAIN_SNES (
       .cram_we_n(cram1_we_n),
       .cram_ub_n(cram1_ub_n),
       .cram_lb_n(cram1_lb_n)
+  );
+
+  // savestate PSRAM DMA: clk_sys byte requests -> clk_mem psram transactions.
+  // Placed after both psram instances so aram_16_out is already declared.
+  // ps_data_out/busy/read_avail are muxed by bank (quasi-static while a bank runs).
+  ss_psram_dma ss_psram_dma_inst (
+      .clk_sys(clk_sys),
+      .clk_mem(clk_mem_85_9),
+
+      .req      (dma_req),
+      .rnw      (dma_rnw),
+      .bank     (dma_bank),
+      .byte_addr(dma_addr),
+      .wdata    (dma_wdata),
+      .done     (dma_done),
+      .rdata    (dma_rdata),
+
+      .ps_word_addr (dma_ps_word_addr),
+      .ps_rd        (dma_ps_rd),
+      .ps_wr        (dma_ps_wr),
+      .ps_data_in   (dma_ps_data_in),
+      .ps_whb       (dma_ps_whb),
+      .ps_wlb       (dma_ps_wlb),
+      .ps_data_out  (dma_bank ? aram_16_out : wram_data_out),
+      .ps_busy      (dma_bank ? aram_busy : wram_busy),
+      .ps_read_avail(dma_bank ? aram_read_avail : wram_read_avail)
   );
 
   localparam BSRAM_BITS = 17;  // 1Mbits

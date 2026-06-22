@@ -1,65 +1,67 @@
 // =============================================================================
-// ss_spike.sv  --  FEASIBILITY SPIKE, not a finished feature.
+// ss_spike.sv  --  savestate RAM walker (VRAM + WRAM + ARAM).
 // =============================================================================
 //
-// Minimal savestate-bus master for the Pro Action Replay MK3 SNES core. Its only
-// purpose is to wire the full Analogue Pocket savestate pipeline end-to-end so
-// Quartus can report the resource cost (ALMs/LEs + block-RAM) of the savestate
-// infrastructure -- i.e. to answer "does this fit in the FPGA?" before committing
-// to the full, multi-chip register serialization.
+// Serializes the SNES RAM state to/from the APF save_state_controller. Walks a
+// flat byte address space and packs 8 consecutive bytes into each 64-bit ss word
+// (little-endian within the word); word 0 is a header (magic + version).
 //
-// SCOPE: it serializes ONLY the 64 KB SNES VRAM (vram1 = $0000-$7FFF,
-// vram2 = $8000-$FFFF, both block RAM in SNES.sv). It does NOT capture the
-// internal flip-flop state of the 65C816 CPU, the SPC700, the PPU, the S-DSP or
-// any enhancement chip. A restored state therefore will NOT resume into a running
-// machine -- that is expected and fine: the spike measures *fit*, not playability.
+//   flat byte range      size     backing store         access path
+//   -----------------    -------  --------------------  ------------------------
+//   0x00000..0x0FFFF      64 KB    VRAM (block RAM)      port B, 1-cycle (clk_sys)
+//   0x10000..0x2FFFF     128 KB    WRAM (PSRAM cram0)    ss_psram_dma, bank 0
+//   0x30000..0x3FFFF      64 KB    ARAM (PSRAM cram1)    ss_psram_dma, bank 1
 //
-// PROTOCOL CONTRACT (mirrors save_state_controller.sv, same clk domain):
-//   SAVE: on an ss_save pulse, raise ss_busy. For each 64-bit word, drive ss_din
-//         then pulse ss_req (1 cycle) and wait for ss_ack. After the last word,
-//         drop ss_busy -- the controller sees busy 1->0 and finishes.
-//   LOAD: on an ss_load pulse, raise ss_busy. For each 64-bit word, pulse ss_req,
-//         wait for ss_ack, and capture ss_dout on the ack cycle. After the last
-//         word, drop ss_busy.
+// The SNES core is frozen (SS_PAUSE) for the whole transfer, so these reads/writes
+// see a stopped machine. This still does NOT capture chip registers (CPU/PPU/SMP/
+// DSP) -- those come with the register-chain increments -- so a restore is not yet
+// a complete machine state. RAM is the bulk of a savestate; registers are next.
 //
-// ss_addr / ss_rnw / ss_be are ignored by the controller; driven to constants.
-//
-// Word 0 is a header (magic + version). Words 1..8192 each pack 8 consecutive
-// VRAM bytes, little-endian within the 64-bit word:
-//   ss_din = { byte[base+7], ..., byte[base+1], byte[base+0] },  base = (word-1)*8
-//
-// VRAM block RAM read latency: address_reg_b="CLOCK1", outdata_reg_b="UNREGISTERED"
-// (see bram.vhd) -> q valid 1-2 cycles after the address is presented. We wait a
-// fixed 2 cycles before capturing, which is safe either way.
+// Protocol contract (save_state_controller.sv, clk_sys domain):
+//   SAVE: on ss_save, raise ss_busy; per word drive ss_din, pulse ss_req, wait
+//         ss_ack; after the last word drop ss_busy.
+//   LOAD: on ss_load, raise ss_busy; per word pulse ss_req, wait ss_ack, capture
+//         ss_dout; after the last word drop ss_busy.
 // =============================================================================
 
 module ss_spike (
-    input  wire        clk,            // clk_sys_21_48 (same as VRAM + controller)
+    input  wire        clk,            // clk_sys_21_48
 
-    // APF savestate bus (connects to save_state_controller in core_top)
-    input  wire        ss_save,        // capture trigger (1-cycle pulse)
-    input  wire        ss_load,        // restore trigger (1-cycle pulse)
-    output reg         ss_busy,        // high while this master is walking state
-    output reg         ss_req,         // 1-cycle "word ready / word wanted" pulse
-    input  wire        ss_ack,         // controller consumed (save) / provided (load) a word
-    output reg  [63:0] ss_din,         // SAVE: word out to controller
-    input  wire [63:0] ss_dout,        // LOAD: word in from controller
-    output wire [25:0] ss_addr,        // unused by controller
-    output wire        ss_rnw,         // unused by controller
-    output wire [7:0]  ss_be,          // unused by controller
+    // APF savestate bus (save_state_controller)
+    input  wire        ss_save,
+    input  wire        ss_load,
+    output reg         ss_busy,
+    output reg         ss_req,
+    input  wire        ss_ack,
+    output reg  [63:0] ss_din,
+    input  wire [63:0] ss_dout,
+    output wire [25:0] ss_addr,
+    output wire        ss_rnw,
+    output wire [7:0]  ss_be,
 
-    // VRAM port-B tap (muxed onto the vram1/vram2 dpram in SNES.sv)
-    output reg  [14:0] ss_vram_addr,   // in-bank byte address
+    // VRAM port-B tap (block RAM, muxed in SNES.sv)
+    output reg  [14:0] ss_vram_addr,
     output reg         ss_vram_sel2,   // 0 = vram1, 1 = vram2
-    output reg         ss_vram_wren,   // 1-cycle write strobe (LOAD)
-    output reg  [7:0]  ss_vram_wdata,  // write byte (LOAD)
-    input  wire [7:0]  vram1_q,        // vram1 port-B read data
-    input  wire [7:0]  vram2_q         // vram2 port-B read data
+    output reg         ss_vram_wren,
+    output reg  [7:0]  ss_vram_wdata,
+    input  wire [7:0]  vram1_q,
+    input  wire [7:0]  vram2_q,
+
+    // PSRAM byte DMA handshake (ss_psram_dma, clk_sys side)
+    output reg         dma_req,
+    output reg         dma_rnw,        // 1 = read, 0 = write
+    output reg         dma_bank,       // 0 = WRAM, 1 = ARAM
+    output reg  [16:0] dma_addr,       // byte address within the bank
+    output reg  [7:0]  dma_wdata,
+    input  wire        dma_done,
+    input  wire [7:0]  dma_rdata
 );
 
-  // 64 KB VRAM => 8192 payload words. Index 0 is the header, 1..8192 the payload.
-  localparam [13:0] LAST_WORD = 14'd8192;
-  localparam [63:0] SS_MAGIC  = 64'h5350_494B_4531_0001;  // "SPIKE1" + version 1
+  // Flat byte map. 0x40000 bytes / 8 = 0x8000 payload words; word 0 is the header.
+  localparam [17:0] VRAM_END  = 18'h10000;  // end of VRAM / start of WRAM
+  localparam [17:0] WRAM_END  = 18'h30000;  // end of WRAM / start of ARAM
+  localparam [15:0] LAST_WORD = 16'h8000;   // 32768 payload words
+  localparam [63:0] SS_MAGIC  = 64'h5350_494B_4532_0001;  // "SPIKE2" + version 1
 
   // The controller ignores these; drive constants so they never float.
   assign ss_addr = 26'd0;
@@ -67,102 +69,125 @@ module ss_spike (
   assign ss_be   = 8'hFF;
 
   localparam [3:0]
-      IDLE        = 4'd0,
-      S_ADDR      = 4'd1,   // SAVE: present byte address
-      S_WAIT      = 4'd2,   // SAVE: wait out RAM read latency
-      S_CAP       = 4'd3,   // SAVE: capture byte into wbuf
-      S_REQ_LATCH = 4'd4,   // SAVE: latch assembled word, pulse ss_req
-      S_REQ       = 4'd5,   // SAVE: header word path, pulse ss_req
-      S_ACK       = 4'd6,   // SAVE: wait for ss_ack
-      L_REQ       = 4'd7,   // LOAD: request word, pulse ss_req
-      L_ACK       = 4'd8,   // LOAD: wait for ss_ack, latch ss_dout
-      L_WR        = 4'd9;   // LOAD: scatter 8 bytes into VRAM
+      IDLE       = 4'd0,
+      S_EMIT     = 4'd1,   // SAVE: present word, pulse ss_req
+      S_EMIT_ACK = 4'd2,   // SAVE: wait ss_ack
+      S_DISP     = 4'd3,   // SAVE: dispatch byte read (VRAM or DMA)
+      S_VWAIT    = 4'd4,   // SAVE: VRAM read latency, capture
+      S_DWAIT    = 4'd5,   // SAVE: wait DMA read done, capture
+      S_DREL     = 4'd6,   // SAVE: release DMA handshake
+      S_NEXT     = 4'd7,   // SAVE: next byte / emit word
+      L_REQ      = 4'd8,   // LOAD: request word, pulse ss_req
+      L_ACK      = 4'd9,   // LOAD: wait ss_ack, capture ss_dout
+      L_DISP     = 4'd10,  // LOAD: dispatch byte write (VRAM or DMA)
+      L_VWR      = 4'd11,  // LOAD: VRAM write settle
+      L_DWAIT    = 4'd12,  // LOAD: wait DMA write done
+      L_DREL     = 4'd13,  // LOAD: release DMA handshake
+      L_NEXT     = 4'd14;  // LOAD: next byte / pull next word
 
   reg [3:0]  st;
-  reg [13:0] word_idx;     // 0..8192
-  reg [2:0]  byte_idx;     // 0..7 byte within the current word
-  reg [1:0]  wait_cnt;     // RAM read-latency counter
+  reg [15:0] word_idx;     // 0..32768
+  reg [2:0]  byte_idx;     // 0..7 within the current word
+  reg [1:0]  wait_cnt;     // VRAM read latency
   reg [63:0] wbuf;         // word assembly / disassembly buffer
 
   reg prev_save, prev_load;
 
-  // Byte address of the current (word,byte). For word_idx 1..8192 the payload
-  // base is (word_idx-1)*8; cur_byte spans 0..65535 across both VRAM halves.
-  wire [13:0] payload_word = word_idx - 14'd1;            // 0..8191 for word 1..8192
-  wire [15:0] base_byte    = {payload_word[12:0], 3'd0};  // payload_word << 3 (16 bits)
-  wire [15:0] cur_byte     = base_byte + {13'd0, byte_idx};
+  // Flat byte address of the current (word, byte). Payload words are 1..32768,
+  // so the byte base is (word_idx-1)*8.
+  wire [14:0] payload_word = word_idx[14:0] - 15'd1;
+  wire [17:0] base_byte    = {payload_word, 3'd0};
+  wire [17:0] gbyte        = base_byte + {15'd0, byte_idx};
+
+  // Region decode (valid only while gathering/scattering a payload byte)
+  wire        in_vram    = gbyte < VRAM_END;
+  wire        in_aram    = gbyte >= WRAM_END;
+  wire [16:0] local_addr = in_aram ? (gbyte[16:0] - WRAM_END[16:0])
+                                   : (gbyte[16:0] - VRAM_END[16:0]);
 
   always @(posedge clk) begin
     prev_save <= ss_save;
     prev_load <= ss_load;
 
-    // default deasserts (one-cycle strobes)
+    // default one-cycle strobes
     ss_req       <= 1'b0;
     ss_vram_wren <= 1'b0;
 
     case (st)
-      // ----------------------------------------------------------------
       IDLE: begin
         ss_busy  <= 1'b0;
         byte_idx <= 3'd0;
-        wait_cnt <= 2'd0;
         if (ss_save && ~prev_save) begin
           ss_busy  <= 1'b1;
-          word_idx <= 14'd0;        // emit the header word first
+          word_idx <= 16'd0;          // header word first
           ss_din   <= SS_MAGIC;
-          st       <= S_REQ;
+          st       <= S_EMIT;
         end else if (ss_load && ~prev_load) begin
           ss_busy  <= 1'b1;
-          word_idx <= 14'd0;        // consume (and discard) the header word first
+          word_idx <= 16'd0;          // pull & discard header word first
           st       <= L_REQ;
         end
       end
 
-      // ---- SAVE: gather 8 bytes, then hand the word to the controller ----
-      S_ADDR: begin
-        ss_vram_addr <= cur_byte[14:0];
-        ss_vram_sel2 <= cur_byte[15];
-        wait_cnt     <= 2'd0;
-        st           <= S_WAIT;
-      end
-      S_WAIT: begin
-        if (wait_cnt == 2'd1) st <= S_CAP;   // 2 cycles after address presented
-        wait_cnt <= wait_cnt + 2'd1;
-      end
-      S_CAP: begin
-        wbuf[byte_idx*8 +: 8] <= ss_vram_sel2 ? vram2_q : vram1_q;
-        if (byte_idx == 3'd7) begin
-          byte_idx <= 3'd0;
-          st       <= S_REQ_LATCH;
-        end else begin
-          byte_idx <= byte_idx + 3'd1;
-          st       <= S_ADDR;
-        end
-      end
-      S_REQ_LATCH: begin
-        // wbuf now holds all 8 bytes (last byte committed this cycle)
-        ss_din <= wbuf;
+      // ---------------- SAVE ----------------
+      S_EMIT: begin
         ss_req <= 1'b1;
-        st     <= S_ACK;
+        st     <= S_EMIT_ACK;
       end
-      S_REQ: begin
-        // header path (ss_din already loaded in IDLE)
-        ss_req <= 1'b1;
-        st     <= S_ACK;
-      end
-      S_ACK: begin
+      S_EMIT_ACK: begin
         if (ss_ack) begin
           if (word_idx == LAST_WORD) begin
             ss_busy <= 1'b0;
             st      <= IDLE;
           end else begin
-            word_idx <= word_idx + 14'd1;
-            st       <= S_ADDR;     // gather next payload word
+            word_idx <= word_idx + 16'd1;
+            byte_idx <= 3'd0;
+            st       <= S_DISP;
           end
         end
       end
+      S_DISP: begin
+        if (in_vram) begin
+          ss_vram_addr <= gbyte[14:0];
+          ss_vram_sel2 <= gbyte[15];
+          wait_cnt     <= 2'd0;
+          st           <= S_VWAIT;
+        end else begin
+          dma_req  <= 1'b1;
+          dma_rnw  <= 1'b1;
+          dma_bank <= in_aram;
+          dma_addr <= local_addr;
+          st       <= S_DWAIT;
+        end
+      end
+      S_VWAIT: begin
+        if (wait_cnt == 2'd1) begin
+          wbuf[byte_idx*8 +: 8] <= ss_vram_sel2 ? vram2_q : vram1_q;
+          st <= S_NEXT;
+        end
+        wait_cnt <= wait_cnt + 2'd1;
+      end
+      S_DWAIT: begin
+        if (dma_done) begin
+          wbuf[byte_idx*8 +: 8] <= dma_rdata;
+          dma_req <= 1'b0;
+          st      <= S_DREL;
+        end
+      end
+      S_DREL: begin
+        if (~dma_done) st <= S_NEXT;
+      end
+      S_NEXT: begin
+        if (byte_idx == 3'd7) begin
+          ss_din <= wbuf;
+          st     <= S_EMIT;          // emit the assembled payload word
+        end else begin
+          byte_idx <= byte_idx + 3'd1;
+          st       <= S_DISP;
+        end
+      end
 
-      // ---- LOAD: pull each word, scatter 8 bytes into VRAM ----
+      // ---------------- LOAD ----------------
       L_REQ: begin
         ss_req <= 1'b1;
         st     <= L_ACK;
@@ -170,32 +195,55 @@ module ss_spike (
       L_ACK: begin
         if (ss_ack) begin
           wbuf <= ss_dout;
-          if (word_idx == 14'd0) begin
-            // header word: discard, move to first payload word
-            word_idx <= 14'd1;
+          if (word_idx == 16'd0) begin
+            word_idx <= 16'd1;        // discard header, pull first payload word
             st       <= L_REQ;
           end else begin
             byte_idx <= 3'd0;
-            st       <= L_WR;
+            st       <= L_DISP;
           end
         end
       end
-      L_WR: begin
-        ss_vram_addr  <= cur_byte[14:0];
-        ss_vram_sel2  <= cur_byte[15];
-        ss_vram_wdata <= wbuf[byte_idx*8 +: 8];
-        ss_vram_wren  <= 1'b1;
+      L_DISP: begin
+        if (in_vram) begin
+          ss_vram_addr  <= gbyte[14:0];
+          ss_vram_sel2  <= gbyte[15];
+          ss_vram_wdata <= wbuf[byte_idx*8 +: 8];
+          ss_vram_wren  <= 1'b1;
+          st            <= L_VWR;
+        end else begin
+          dma_req   <= 1'b1;
+          dma_rnw   <= 1'b0;
+          dma_bank  <= in_aram;
+          dma_addr  <= local_addr;
+          dma_wdata <= wbuf[byte_idx*8 +: 8];
+          st        <= L_DWAIT;
+        end
+      end
+      L_VWR: begin
+        st <= L_NEXT;
+      end
+      L_DWAIT: begin
+        if (dma_done) begin
+          dma_req <= 1'b0;
+          st      <= L_DREL;
+        end
+      end
+      L_DREL: begin
+        if (~dma_done) st <= L_NEXT;
+      end
+      L_NEXT: begin
         if (byte_idx == 3'd7) begin
-          byte_idx <= 3'd0;
           if (word_idx == LAST_WORD) begin
             ss_busy <= 1'b0;
             st      <= IDLE;
           end else begin
-            word_idx <= word_idx + 14'd1;
-            st       <= L_REQ;
+            word_idx <= word_idx + 16'd1;
+            st       <= L_REQ;        // pull next payload word
           end
         end else begin
           byte_idx <= byte_idx + 3'd1;
+          st       <= L_DISP;
         end
       end
 
