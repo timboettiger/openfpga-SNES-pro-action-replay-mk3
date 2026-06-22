@@ -4,6 +4,31 @@
 > **Passt die Savestate-Infrastruktur überhaupt in den FPGA?** Er liefert noch
 > kein spielbares Sleep/Wake.
 
+## Ergebnis (Quartus 21.1, gemessen 2026-06-22)
+
+**Es passt — und der Spike kostet fast nichts.** Apples-to-apples gegen sauberes
+`master` (gleicher Workflow, gleiches Quartus):
+
+| Metrik | master | Spike | Δ |
+|---|---|---|---|
+| Logic (ALMs) | 11.380 (62 %) | 11.429 (62 %) | **+49** |
+| Register | 11.096 | 11.544 | +448 |
+| Block-RAM-Bits | 1.862.528 (59 %) | 1.993.856 (63 %) | +131.328 |
+| RAM-Blöcke (M10K) | 235 (76 %) | 253 (82 %) | **+18** |
+| DSP-Blöcke | 26 | 26 | 0 |
+| Worst Setup Slack | **-3.985 ns** | -4.409 ns | -0.424 ns |
+
+- **Fit:** ja. Die Infrastruktur (Controller + 2 FIFOs + VRAM-Walker) kostet nur
+  **+49 ALMs** und **+18 M10K-Blöcke** (die FIFOs). Es bleiben 38 % ALM und 18 %
+  M10K frei für die volle Chip-Serialisierung — die ist ALM-lastig, BRAM-arm, der
+  M10K-Druck bleibt also ~hier.
+- **Timing:** `master` **verfehlt das Timing schon ohne den Spike** (-3.985 ns auf
+  dem SNES-Compute-Takt `general[1]`). Der Spike taucht in **keinem** kritischen
+  Pfad auf (STA-Report: 0 Treffer für `ss_spike`/`save_state_controller`); die
+  -0.42 ns extra sind Routing-Congestion auf ohnehin verletzten Kern-Pfaden. Die
+  volle Variante gated den Core-Takt während `ss_busy` und nimmt ihn damit aus dem
+  Timing-Druck.
+
 ## Worum es geht
 
 Auf der Analogue Pocket ist „Sleep & Wake / Memories" **technisch identisch mit
