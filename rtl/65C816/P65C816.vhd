@@ -22,7 +22,17 @@ entity P65C816 is
 		  VPA 		: out std_logic;
 		  VDA 		: out std_logic;
 		  MLB 		: out std_logic;
-		  VPB 		: out std_logic
+		  VPB 		: out std_logic;
+		  -- Savestate: architectural register vector out, and load-in vector +
+		  -- pulse. SS_REG_LOAD is asserted only while the core is paused (ENABLE=0),
+		  -- so loading wins over the EN-gated normal updates. Byte layout (LSB
+		  -- first): A,X,Y,SP,D,T (16b each), DR(8), P(9 -> 2 bytes), PBR(8),
+		  -- DBR(8), padding to 192b. PC/IR/microcode/interrupt state not yet here.
+		  -- Inputs default to inert so other P65C816 instances that don't drive
+		  -- them (e.g. the SA-1 coprocessor's internal 65C816, SA1.vhd) stay valid.
+		  SS_REG_DO   : out std_logic_vector(191 downto 0);
+		  SS_REG_DI   : in  std_logic_vector(191 downto 0) := (others => '0');
+		  SS_REG_LOAD : in  std_logic := '0'
     );
 end P65C816;
 
@@ -75,7 +85,37 @@ architecture rtl of P65C816 is
 	
 begin
 	EN <= RDY_IN and CE and not WAIExec and not STPExec;
-	
+
+	-- Savestate register vector (must match SS_REG_DI slices in the load branches).
+	-- byte0..: A,X,Y,SP,D,T,DR, P(low8),P(bit8), PBR,DBR, pad to 192b.
+	SS_REG_DO <= x"0000" &                 -- 191..176 padding (16b)
+	             OLD_NMI_N &                -- 175
+	             IsIRQInterrupt &           -- 174
+	             IsNMIInterrupt &           -- 173
+	             IsResetInterrupt &         -- 172
+	             IRQ_ACTIVE &               -- 171
+	             NMI_ACTIVE &               -- 170
+	             IRQ_SYNC &                 -- 169
+	             NMI_SYNC &                 -- 168
+	             GotInterrupt &             -- 167
+	             STPExec &                  -- 166
+	             WAIExec &                  -- 165
+	             oldXF &                    -- 164
+	             PC &                       -- 163..148
+	             std_logic_vector(STATE) &  -- 147..144
+	             IR &                       -- 143..136
+	             DBR &                      -- 135..128
+	             PBR &                      -- 127..120
+	             "0000000" & P(8) &         -- 119..112
+	             P(7 downto 0) &            -- 111..104
+	             DR &                       -- 103..96
+	             T &                        -- 95..80
+	             D &                        -- 79..64
+	             SP &                       -- 63..48
+	             Y &                        -- 47..32
+	             X &                        -- 31..16
+	             A;                         -- 15..0
+
 	IsBranchCycle1 <= '1' when IR(4 downto 0) = "10000" and STATE = "0001" else '0';
 	process(IR, P)
 	begin
@@ -161,12 +201,15 @@ begin
 			STATE <= (others=>'0');
 			IR <= (others=>'0');
 		elsif rising_edge(CLK) then
-			if EN = '1' then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				IR    <= SS_REG_DI(143 downto 136);
+				STATE <= unsigned(SS_REG_DI(147 downto 144));
+			elsif EN = '1' then
 				IR <= NextIR;
 				STATE <= NextState;
 			end if;
 		end if;
-	end process; 
+	end process;
 	 
 	
 	MCode: entity work.MCode
@@ -202,8 +245,10 @@ begin
 		AA     		=> AA, 
 		AB     		=> AB, 
 		DX     		=> DX,
-		AALCarry     => AALCarry, 
-		JumpNoOfl 	=> JumpNoOverflow
+		AALCarry     => AALCarry,
+		JumpNoOfl 	=> JumpNoOverflow,
+		SS_PC_DI		=> SS_REG_DI(163 downto 148),
+		SS_LOAD		=> SS_REG_LOAD
 	);
 	
 	
@@ -265,7 +310,13 @@ begin
 			SP <= x"0100";
 			oldXF <= '1';
 		elsif rising_edge(CLK) then
-			if (IR = x"FB" and P(0) = '1' and MC.LOAD_P = "101") then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				A     <= SS_REG_DI(15 downto 0);
+				X     <= SS_REG_DI(31 downto 16);
+				Y     <= SS_REG_DI(47 downto 32);
+				SP    <= SS_REG_DI(63 downto 48);
+				oldXF <= SS_REG_DI(164);
+			elsif (IR = x"FB" and P(0) = '1' and MC.LOAD_P = "101") then
 				X(15 downto 8) <= x"00";
 				Y(15 downto 8) <= x"00";
 				SP(15 downto 8) <= x"01";
@@ -354,7 +405,9 @@ begin
 		if RST_N = '0' then
 			P <= "100110100";
 		elsif rising_edge(CLK) then
-			if EN = '1' then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				P <= SS_REG_DI(112 downto 104);
+			elsif EN = '1' then
 				case MC.LOAD_P is
 					when "000" => P <= P;
 					when "001" => 
@@ -405,7 +458,13 @@ begin
 			PBR <= (others=>'0');
 			DBR <= (others=>'0');
 		elsif rising_edge(CLK) then
-			if EN = '1' then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				T   <= SS_REG_DI(95 downto 80);
+				DR  <= SS_REG_DI(103 downto 96);
+				D   <= SS_REG_DI(79 downto 64);
+				PBR <= SS_REG_DI(127 downto 120);
+				DBR <= SS_REG_DI(135 downto 128);
+			elsif EN = '1' then
 				DR <= D_IN;
 				
 				case MC.LOAD_T is
@@ -470,7 +529,11 @@ begin
 			NMI_SYNC <= '0';
 			IRQ_SYNC <= '0';
 		elsif rising_edge(CLK) then
-			if CE = '1' and IsResetInterrupt = '0' then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				OLD_NMI_N <= SS_REG_DI(175);
+				NMI_SYNC  <= SS_REG_DI(168);
+				IRQ_SYNC  <= SS_REG_DI(169);
+			elsif CE = '1' and IsResetInterrupt = '0' then
 				OLD_NMI_N <= NMI_N;
 				if NMI_N = '0' and OLD_NMI_N = '1' and NMI_SYNC = '0' then
 					NMI_SYNC <= '1';
@@ -492,7 +555,14 @@ begin
 			NMI_ACTIVE <= '0';
 			IRQ_ACTIVE <= '0';
 		elsif rising_edge(CLK) then
-			if RDY_IN = '1' and CE = '1' then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				IsResetInterrupt <= SS_REG_DI(172);
+				IsNMIInterrupt   <= SS_REG_DI(173);
+				IsIRQInterrupt   <= SS_REG_DI(174);
+				GotInterrupt     <= SS_REG_DI(167);
+				NMI_ACTIVE       <= SS_REG_DI(170);
+				IRQ_ACTIVE       <= SS_REG_DI(171);
+			elsif RDY_IN = '1' and CE = '1' then
 				NMI_ACTIVE <= NMI_SYNC;
 				IRQ_ACTIVE <= not IRQ_N;
 				
@@ -524,19 +594,24 @@ begin
 			WAIExec <= '0';
 			STPExec <= '0';
 		elsif rising_edge(CLK) then
-			if EN = '1' and GotInterrupt = '0' then
-				if STATE = "0000" then 
-					if D_IN = x"CB" then			-- WAI
-						WAIExec <= '1';
-					elsif D_IN = x"DB" then		-- STP
-						STPExec <= '1';
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				WAIExec <= SS_REG_DI(165);
+				STPExec <= SS_REG_DI(166);
+			else
+				if EN = '1' and GotInterrupt = '0' then
+					if STATE = "0000" then
+						if D_IN = x"CB" then			-- WAI
+							WAIExec <= '1';
+						elsif D_IN = x"DB" then		-- STP
+							STPExec <= '1';
+						end if;
 					end if;
 				end if;
-			end if;
-			
-			if RDY_IN = '1' and CE = '1' then
-				if ( NMI_SYNC = '1' or IRQ_SYNC = '1' or ABORT_N = '0' ) and WAIExec = '1' then
-					WAIExec <= '0';
+
+				if RDY_IN = '1' and CE = '1' then
+					if ( NMI_SYNC = '1' or IRQ_SYNC = '1' or ABORT_N = '0' ) and WAIExec = '1' then
+						WAIExec <= '0';
+					end if;
 				end if;
 			end if;
 		end if;

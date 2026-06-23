@@ -16,7 +16,12 @@ entity SPC700 is
         WE				: out std_logic;
 
 		  REG_DAT		: in std_logic_vector(55 downto 0);
-		  REG_SET		: in std_logic
+		  REG_SET		: in std_logic;
+		  -- Savestate vector (72b): A,X,Y,SP,PSW (8 each), PC(16), IR(8), STATE(4),
+		  -- STPExec, IsIRQInterrupt, pad. PC loads via SPC700_AddrGen.SS_LOAD.
+		  SS_DO			: out std_logic_vector(71 downto 0);
+		  SS_DI			: in  std_logic_vector(71 downto 0) := (others => '0');
+		  SS_LOAD		: in  std_logic := '0'
     );
 end SPC700;
 
@@ -153,7 +158,10 @@ begin
 			STATE <= (others=>'0');
 			IR <= (others=>'0');
 		elsif rising_edge(CLK) then
-			if EN = '1' then
+			if SS_LOAD = '1' then        -- savestate restore (core paused)
+				IR    <= SS_DI(63 downto 56);
+				STATE <= unsigned(SS_DI(67 downto 64));
+			elsif EN = '1' then
 				IR <= NextIR;
 				STATE <= NextState;
 			end if;
@@ -190,9 +198,15 @@ begin
 		PC     		=> PC, 
 		AX     		=> AX, 
 		ALCarry     => ALCarry, 
-		REG_DAT	   => REG_DAT(15 downto 0), 
-		REG_SET	   => REG_SET
+		REG_DAT	   => REG_DAT(15 downto 0),
+		REG_SET	   => REG_SET,
+		SS_PC_DI		=> SS_DI(55 downto 40),
+		SS_LOAD		=> SS_LOAD
 	);
+
+	-- Savestate save vector (must match SS_DI slices in the load branches below)
+	SS_DO <= "00" & IsIRQInterrupt & STPExec & std_logic_vector(STATE) & IR &
+	         PC & PSW & SP & Y & X & A;
 	
 	BitToC <= std_logic_vector(unsigned(D_IN) srl nBit);
 	CToBit <= std_logic_vector(unsigned(PSW and x"01") sll nBit);
@@ -265,8 +279,12 @@ begin
 			X <= (others=>'0');
 			Y <= (others=>'0');
 		elsif rising_edge(CLK) then
-			if REG_SET = '1' then
-				A <= REG_DAT(23 downto 16); 
+			if SS_LOAD = '1' then        -- savestate restore (core paused)
+				A <= SS_DI(7 downto 0);
+				X <= SS_DI(15 downto 8);
+				Y <= SS_DI(23 downto 16);
+			elsif REG_SET = '1' then
+				A <= REG_DAT(23 downto 16);
 				X <= REG_DAT(31 downto 24);
 				Y <= REG_DAT(39 downto 32);
 			elsif EN = '0' then
@@ -299,7 +317,10 @@ begin
 			SP <= (others=>'0');
 			T <= (others=>'0');
 		elsif rising_edge(CLK) then
-			if REG_SET = '1' then
+			if SS_LOAD = '1' then        -- savestate restore (core paused)
+				PSW <= SS_DI(39 downto 32);
+				SP  <= SS_DI(31 downto 24);
+			elsif REG_SET = '1' then
 				PSW <= REG_DAT(47 downto 40);
 				SP <= REG_DAT(55 downto 48);
 			elsif EN = '0' then
@@ -404,8 +425,13 @@ begin
 			IsIRQInterrupt <= '0'; 
 			STPExec <= '0'; 
 		elsif rising_edge(CLK) then
-			if REG_SET = '1' then	--need for SPC Player
-				GotInterrupt <= '0'; 
+			if SS_LOAD = '1' then        -- savestate restore (core paused)
+				IsIRQInterrupt   <= SS_DI(69);
+				STPExec          <= SS_DI(68);
+				GotInterrupt     <= '0';
+				IsResetInterrupt <= '0';
+			elsif REG_SET = '1' then	--need for SPC Player
+				GotInterrupt <= '0';
 				IsResetInterrupt <= '0';
 			elsif EN = '0' then
 				

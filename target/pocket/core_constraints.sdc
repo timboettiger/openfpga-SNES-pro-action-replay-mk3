@@ -17,11 +17,25 @@ set_clock_groups -asynchronous \
 
 derive_clock_uncertainty
 
-set_multicycle_path -from {ic|nes|sdram|*} -to [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -start -setup 2
-set_multicycle_path -from {ic|nes|sdram|*} -to [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -start -hold 1
+# SNES <-> SDRAM is accessed across the 4:1 clk_sys:clk_mem ratio with the request
+# held stable, so the crossing is multicycle. NOTE: the SNES wrapper is `snes`
+# (MAIN_SNES); the previous `ic|nes|sdram` was a stale NES-template name that
+# silently matched nothing (Quartus "Ignored filter" warning), leaving SDRAM
+# analyzed single-cycle. Fixed to `snes`.
+set_multicycle_path -from {ic|snes|sdram|*} -to [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -start -setup 2
+set_multicycle_path -from {ic|snes|sdram|*} -to [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -start -hold 1
 
-set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -to {ic|nes|sdram|*} -setup 2
-set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -to {ic|nes|sdram|*} -hold 1
+set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -to {ic|snes|sdram|*} -setup 2
+set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -to {ic|snes|sdram|*} -hold 1
+
+# PSRAM (WRAM = cram0, ARAM = cram1) is accessed the same way (clk_sys -> clk_mem,
+# request held stable). The savestate DMA adds an input mux on these clk_mem paths;
+# without multicycle they are analyzed single-cycle and dominate the negative slack.
+set_multicycle_path -from {ic|snes|wram|* ic|snes|aram|*} -to [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -start -setup 2
+set_multicycle_path -from {ic|snes|wram|* ic|snes|aram|*} -to [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -start -hold 1
+
+set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -to {ic|snes|wram|* ic|snes|aram|*} -setup 2
+set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase_inst|altera_pll_i|*[1].*|divclk}] -to {ic|snes|wram|* ic|snes|aram|*} -hold 1
 
 set_false_path -from {ic|nes|mapper_flags*}
 #set_false_path -from {ic|nes|downloading*}

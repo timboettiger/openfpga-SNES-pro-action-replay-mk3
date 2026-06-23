@@ -28,7 +28,11 @@ entity AddrGen is
 		  AB     		: out std_logic_vector(7 downto 0);
 		  DX				: out std_logic_vector(15 downto 0);
 		  AALCarry 		: out std_logic;
-		  JumpNoOfl		: out std_logic
+		  JumpNoOfl		: out std_logic;
+		  -- Savestate: load PC (PCr) on SS_LOAD while the core is paused. Defaults
+		  -- keep instances that don't drive them (SA-1's 65C816) valid.
+		  SS_PC_DI		: in std_logic_vector(15 downto 0) := (others => '0');
+		  SS_LOAD		: in std_logic := '0'
     );
 end AddrGen;
 
@@ -89,7 +93,9 @@ begin
 			PCr <= (others=>'0');
 			PCOffset <= (others=>'0');
 		elsif rising_edge(CLK) then
-			if EN = '1' then
+			if SS_LOAD = '1' then        -- savestate restore (core paused)
+				PCr <= SS_PC_DI;
+			elsif EN = '1' then
 				PCOffset <= unsigned(D_IN & DR);
 				PCr <= NextPC;
 			end if;

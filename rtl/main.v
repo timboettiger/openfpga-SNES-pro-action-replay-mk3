@@ -10,6 +10,17 @@ module main #(
 ) (
     input RESET_N,
 
+    // SPIKE/savestate: when high, freeze the whole SNES (gates the core ENABLE).
+    // Clean clock-enable pause: every compute block (CPU/PPU/WRAM/DSP, and SMP
+    // via the DSP-generated SMP_CE which is itself ENABLE-gated) stops advancing
+    // while registers/RAM hold, so a savestate captures/restores a stopped core.
+    input SS_PAUSE,
+
+    // Savestate: aggregated chip register vector pass-through (SNES.vhd <-> ss_spike)
+    output [1087:0] SS_REG_DO,
+    input  [1087:0] SS_REG_DI,
+    input           SS_REG_LOAD,
+
     input MCLK,
     input ACLK,
 
@@ -238,7 +249,7 @@ module main #(
       .dspclk(ACLK),
 
       .rst_n (snes_reset_combined),
-      .enable(1),
+      .enable(~SS_PAUSE),  // savestate: hold the whole core while ss_busy
 
       .ca(CA),
       .ca_raw(CA_RAW),
@@ -324,7 +335,11 @@ module main #(
       .turbo(TURBO),
 
       .audio_l(AUDIO_L),
-      .audio_r(AUDIO_R)
+      .audio_r(AUDIO_R),
+
+      .ss_reg_do(SS_REG_DO),
+      .ss_reg_di(SS_REG_DI),
+      .ss_reg_load(SS_REG_LOAD)
   );
 
   // PAR MK3 SNES wrapper instantiation.

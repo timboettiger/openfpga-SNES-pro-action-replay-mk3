@@ -43,8 +43,13 @@ entity SCPU is
 		JOY2_CLK			: out std_logic;
 
 		TURBO				: in std_logic;
-		
-		DBG_CPU_EN		: in std_logic
+
+		DBG_CPU_EN		: in std_logic;
+
+		-- Savestate: 65C816 register vector pass-through
+		SS_REG_DO		: out std_logic_vector(191 downto 0);
+		SS_REG_DI		: in  std_logic_vector(191 downto 0);
+		SS_REG_LOAD		: in  std_logic
 	);
 end SCPU;
 
@@ -362,8 +367,11 @@ begin
 		IRQ_N       => P65_IRQ_N,
 		ABORT_N     => '1',
 		VPA      	=> P65_VPA,
-		VDA      	=> P65_VDA
-	); 
+		VDA      	=> P65_VDA,
+		SS_REG_DO   => SS_REG_DO,
+		SS_REG_DI   => SS_REG_DI,
+		SS_REG_LOAD => SS_REG_LOAD
+	);
 
 	process(P65_A, P65_VPA, P65_VDA)
 	begin

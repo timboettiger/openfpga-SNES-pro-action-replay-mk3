@@ -102,7 +102,13 @@ entity SNES is
 		DBG_CPU_EN	: in std_logic;
 
 		AUDIO_L		: out std_logic_vector(15 downto 0);
-		AUDIO_R		: out std_logic_vector(15 downto 0)
+		AUDIO_R		: out std_logic_vector(15 downto 0);
+
+		-- Savestate: aggregated chip register vector (to ss_spike via main.v).
+		-- Layout: 65C816 [191:0] + SMP/SPC700 [447:192] + PPU [1087:448].
+		SS_REG_DO	: out std_logic_vector(1087 downto 0);
+		SS_REG_DI	: in  std_logic_vector(1087 downto 0);
+		SS_REG_LOAD	: in  std_logic
 	);
 end SNES;
 
@@ -148,6 +154,11 @@ architecture rtl of SNES is
 	signal SMP_CPU_DI	: std_logic_vector(7 downto 0);
 	signal SMP_EN : std_logic;
 
+	-- Savestate: per-chip register vectors, aggregated into SS_REG_DO
+	signal cpu_ss_do : std_logic_vector(191 downto 0);
+	signal smp_ss_do : std_logic_vector(255 downto 0);
+	signal ppu_ss_do : std_logic_vector(639 downto 0);
+
 	signal APU_RAM_A : std_logic_vector(15 downto 0);
 	signal APU_RAM_DO	: std_logic_vector(7 downto 0);
 	signal APU_RAM_DI	: std_logic_vector(7 downto 0);
@@ -176,6 +187,9 @@ architecture rtl of SNES is
 	end component;
 
 begin
+
+	-- Savestate: aggregate the chip register vectors (65C816 low .. PPU high)
+	SS_REG_DO <= ppu_ss_do & smp_ss_do & cpu_ss_do;
 
 	-- Game Genie
 	GAMEGENIE : component CODES
@@ -236,7 +250,11 @@ begin
 		JOY2_CLK		=> JOY2_CLK,
 
 		TURBO			=> TURBO,
-		DBG_CPU_EN	=> DBG_CPU_EN
+		DBG_CPU_EN	=> DBG_CPU_EN,
+
+		SS_REG_DO	=> cpu_ss_do,
+		SS_REG_DI	=> SS_REG_DI(191 downto 0),
+		SS_REG_LOAD	=> SS_REG_LOAD
 	);
 
 	BUSA_SEL <= '1' when INT_CA(22) = '0' and INT_CA(15 downto 8) /= x"21" else
@@ -335,7 +353,11 @@ begin
 		HSYNC			=> HSYNC,
 		VSYNC			=> VSYNC,
 		
-		BG_EN			=> DBG_BG_EN
+		BG_EN			=> DBG_BG_EN,
+
+		SS_DO			=> ppu_ss_do,
+		SS_DI			=> SS_REG_DI(1087 downto 448),
+		SS_LOAD		=> SS_REG_LOAD
 	);
 
 
@@ -367,7 +389,11 @@ begin
  
 		IO_ADDR		=> IO_ADDR,
 		IO_DAT  		=> IO_DAT,
-		IO_WR			=> IO_WR
+		IO_WR			=> IO_WR,
+
+		SS_REG_DO	=> smp_ss_do,
+		SS_REG_DI	=> SS_REG_DI(447 downto 192),
+		SS_REG_LOAD	=> SS_REG_LOAD
 	);
 
 	-- DSP 

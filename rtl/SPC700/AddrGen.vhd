@@ -23,7 +23,10 @@ entity SPC700_AddrGen is
 		  ALCarry		: out std_logic;
 		  
 		  REG_DAT		: in std_logic_vector(15 downto 0);
-		  REG_SET		: in std_logic
+		  REG_SET		: in std_logic;
+		  -- Savestate: load PCr on SS_LOAD while the core is paused (defaults inert).
+		  SS_PC_DI		: in std_logic_vector(15 downto 0) := (others => '0');
+		  SS_LOAD		: in std_logic := '0'
     );
 end SPC700_AddrGen;
 
@@ -81,8 +84,10 @@ begin
 		if RST_N = '0' then
 			PCr <= (others=>'0');
 			DR <= (others=>'0');
-		elsif rising_edge(CLK) then 
-			if REG_SET = '1' then
+		elsif rising_edge(CLK) then
+			if SS_LOAD = '1' then        -- savestate restore (core paused)
+				PCr <= SS_PC_DI;
+			elsif REG_SET = '1' then
 				PCr <= REG_DAT;
 			elsif EN = '0' then
 				

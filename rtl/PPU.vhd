@@ -54,7 +54,14 @@ entity SPPU is
 		HDE 			: out std_logic;
 		VDE 			: out std_logic;
 		
-		BG_EN			: in std_logic_vector(4 downto 0)
+		BG_EN			: in std_logic_vector(4 downto 0);
+
+		-- Savestate: PPU register vector (640b). Layout is defined by the SS_DO
+		-- concatenation in the architecture; the load branches in the owning
+		-- processes slice SS_DI identically. SS_LOAD pulses while the core is paused.
+		SS_DO			: out std_logic_vector(639 downto 0);
+		SS_DI			: in  std_logic_vector(639 downto 0) := (others => '0');
+		SS_LOAD		: in  std_logic := '0'
 	);
 end SPPU;
 
@@ -276,6 +283,34 @@ signal SUB_MATH_B			: unsigned(4 downto 0);
 signal HIRES 				: std_logic;
 	
 begin
+
+-- Savestate save vector (640b). The load branches (in the owning processes)
+-- slice SS_DI in this exact same order; CGRAM_Lsb loads in the CGRAM process and
+-- H_CNT/V_CNT/FIELD/IN_HBL/IN_VBL load in the HV-counter process.
+SS_DO <= "00" & x"000000000000000" &                  -- [639:578] pad (62b)
+         CGRAM_Lsb &                                   -- [577:570]
+         IN_VBL & IN_HBL & FIELD &                     -- [569:567]
+         std_logic_vector(V_CNT) & std_logic_vector(H_CNT) &  -- [566:549]
+         EXTLATCHr & OAM_PRIO & OAM_PRIO_INDEX & OAM_ADDR &   -- [548:530]
+         OAM_latch & BGHOFS_latch & BGOFS_latch & M7_latch &  -- [529:503]
+         F_LATCH & OPVCT_latch & OPHCT_latch &         -- [502:500]
+         VRAMDATA_Prefetch & std_logic_vector(VMADD_INC) &    -- [499:476]
+         SUBCOLBD & OPVCT & OPHCT &                    -- [475:443]
+         CGADSUB & CGWSEL & TSW & TMW &                -- [442:411]
+         WOBJLOG & WBGLOG & WOBJSEL & W34SEL & W12SEL & -- [410:371]
+         WH3 & WH2 & WH1 & WH0 &                       -- [370:339]
+         M7Y & M7X & M7VOFS & M7HOFS &                 -- [338:287]
+         M7D & M7C & M7B & M7A & M7SEL &               -- [286:215]
+         BG_VOFS(3) & BG_VOFS(2) & BG_VOFS(1) & BG_VOFS(0) &  -- [214:175]
+         BG_HOFS(3) & BG_HOFS(2) & BG_HOFS(1) & BG_HOFS(0) &  -- [174:135]
+         VMADD & VMAIN_ADDRTRANS & VMAIN_ADDRINC & CGADD &    -- [134:107]
+         BG_NBA(3) & BG_NBA(2) & BG_NBA(1) & BG_NBA(0) &      -- [106:91]
+         BG_SC_SIZE(3) & BG_SC_SIZE(2) & BG_SC_SIZE(1) & BG_SC_SIZE(0) &  -- [90:83]
+         BG_SC_ADDR(3) & BG_SC_ADDR(2) & BG_SC_ADDR(1) & BG_SC_ADDR(0) &  -- [82:59]
+         MOSAIC_SIZE & BG_MOSAIC_EN & BG_SIZE & BG3PRIO & BG_MODE &       -- [58:43]
+         M7EXTBG & PSEUDOHIRES & OVERSCAN & OBJINTERLACE & BGINTERLACE &  -- [42:38]
+         TS & TM & OAMADD &                            -- [37:13]
+         OBJSIZE & OBJNAME & OBJADDR & MB & FORCE_BLANK;  -- [12:0]
 
 process( RST_N, CLK )
 variable DOT_CYCLES: unsigned(2 downto 0);
@@ -693,6 +728,93 @@ begin
 				F_LATCH <= '1';
 			end if;
 		end if;
+
+		-- Savestate restore (last in the process so it overrides; core paused).
+		-- Slices mirror the SS_DO concatenation exactly. H/V counters and the
+		-- HV-latch state load in their own process.
+		if SS_LOAD = '1' then
+			FORCE_BLANK       <= SS_DI(0);
+			MB                <= SS_DI(4 downto 1);
+			OBJADDR           <= SS_DI(7 downto 5);
+			OBJNAME           <= SS_DI(9 downto 8);
+			OBJSIZE           <= SS_DI(12 downto 10);
+			OAMADD            <= SS_DI(21 downto 13);
+			TM                <= SS_DI(29 downto 22);
+			TS                <= SS_DI(37 downto 30);
+			BGINTERLACE       <= SS_DI(38);
+			OBJINTERLACE      <= SS_DI(39);
+			OVERSCAN          <= SS_DI(40);
+			PSEUDOHIRES       <= SS_DI(41);
+			M7EXTBG           <= SS_DI(42);
+			BG_MODE           <= SS_DI(45 downto 43);
+			BG3PRIO           <= SS_DI(46);
+			BG_SIZE           <= SS_DI(50 downto 47);
+			BG_MOSAIC_EN      <= SS_DI(54 downto 51);
+			MOSAIC_SIZE       <= SS_DI(58 downto 55);
+			BG_SC_ADDR(0)     <= SS_DI(64 downto 59);
+			BG_SC_ADDR(1)     <= SS_DI(70 downto 65);
+			BG_SC_ADDR(2)     <= SS_DI(76 downto 71);
+			BG_SC_ADDR(3)     <= SS_DI(82 downto 77);
+			BG_SC_SIZE(0)     <= SS_DI(84 downto 83);
+			BG_SC_SIZE(1)     <= SS_DI(86 downto 85);
+			BG_SC_SIZE(2)     <= SS_DI(88 downto 87);
+			BG_SC_SIZE(3)     <= SS_DI(90 downto 89);
+			BG_NBA(0)         <= SS_DI(94 downto 91);
+			BG_NBA(1)         <= SS_DI(98 downto 95);
+			BG_NBA(2)         <= SS_DI(102 downto 99);
+			BG_NBA(3)         <= SS_DI(106 downto 103);
+			CGADD             <= SS_DI(115 downto 107);
+			VMAIN_ADDRINC     <= SS_DI(116);
+			VMAIN_ADDRTRANS   <= SS_DI(118 downto 117);
+			VMADD             <= SS_DI(134 downto 119);
+			BG_HOFS(0)        <= SS_DI(144 downto 135);
+			BG_HOFS(1)        <= SS_DI(154 downto 145);
+			BG_HOFS(2)        <= SS_DI(164 downto 155);
+			BG_HOFS(3)        <= SS_DI(174 downto 165);
+			BG_VOFS(0)        <= SS_DI(184 downto 175);
+			BG_VOFS(1)        <= SS_DI(194 downto 185);
+			BG_VOFS(2)        <= SS_DI(204 downto 195);
+			BG_VOFS(3)        <= SS_DI(214 downto 205);
+			M7SEL             <= SS_DI(222 downto 215);
+			M7A               <= SS_DI(238 downto 223);
+			M7B               <= SS_DI(254 downto 239);
+			M7C               <= SS_DI(270 downto 255);
+			M7D               <= SS_DI(286 downto 271);
+			M7HOFS            <= SS_DI(299 downto 287);
+			M7VOFS            <= SS_DI(312 downto 300);
+			M7X               <= SS_DI(325 downto 313);
+			M7Y               <= SS_DI(338 downto 326);
+			WH0               <= SS_DI(346 downto 339);
+			WH1               <= SS_DI(354 downto 347);
+			WH2               <= SS_DI(362 downto 355);
+			WH3               <= SS_DI(370 downto 363);
+			W12SEL            <= SS_DI(378 downto 371);
+			W34SEL            <= SS_DI(386 downto 379);
+			WOBJSEL           <= SS_DI(394 downto 387);
+			WBGLOG            <= SS_DI(402 downto 395);
+			WOBJLOG           <= SS_DI(410 downto 403);
+			TMW               <= SS_DI(418 downto 411);
+			TSW               <= SS_DI(426 downto 419);
+			CGWSEL            <= SS_DI(434 downto 427);
+			CGADSUB           <= SS_DI(442 downto 435);
+			OPHCT             <= SS_DI(451 downto 443);
+			OPVCT             <= SS_DI(460 downto 452);
+			SUBCOLBD          <= SS_DI(475 downto 461);
+			VMADD_INC         <= unsigned(SS_DI(483 downto 476));
+			VRAMDATA_Prefetch <= SS_DI(499 downto 484);
+			OPHCT_latch       <= SS_DI(500);
+			OPVCT_latch       <= SS_DI(501);
+			F_LATCH           <= SS_DI(502);
+			M7_latch          <= SS_DI(510 downto 503);
+			BGOFS_latch       <= SS_DI(518 downto 511);
+			BGHOFS_latch      <= SS_DI(521 downto 519);
+			OAM_latch         <= SS_DI(529 downto 522);
+			OAM_ADDR          <= SS_DI(539 downto 530);
+			OAM_PRIO_INDEX    <= SS_DI(546 downto 540);
+			OAM_PRIO          <= SS_DI(547);
+			EXTLATCHr         <= SS_DI(548);
+			CGRAM_Lsb         <= SS_DI(577 downto 570);
+		end if;
 	end if;
 end process;
 
@@ -894,6 +1016,15 @@ begin
 				if V_CNT = VSYNC_LINE then VSYNC <= '1'; end if;
 				if V_CNT = VSYNC_LINE+3 then VSYNC <= '0'; end if;
 			end if;
+		end if;
+
+		-- Savestate restore (last -> overrides; core paused). Slices mirror SS_DO.
+		if SS_LOAD = '1' then
+			H_CNT  <= unsigned(SS_DI(557 downto 549));
+			V_CNT  <= unsigned(SS_DI(566 downto 558));
+			FIELD  <= SS_DI(567);
+			IN_HBL <= SS_DI(568);
+			IN_VBL <= SS_DI(569);
 		end if;
 	end if;
 end process;

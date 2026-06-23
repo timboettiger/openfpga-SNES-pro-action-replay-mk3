@@ -1,0 +1,52 @@
+# Savestate spike: compile the bitstream and publish the Quartus resource +
+# timing reports, so we can answer "does the savestate infrastructure fit?".
+# Runs on pushes to the spike branch and on manual dispatch. Does NOT release.
+name: Spike Fit Report
+
+on:
+  push:
+    branches:
+      - "feature/savestates"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile bitstream (Quartus)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/build" -w /build \
+            raetro/quartus:21.1 \
+            quartus_sh --flow compile projects/snes_pocket.qpf
+          sudo chown -R "$USER" projects/output_files
+
+      - name: Resource + timing summary
+        if: always()
+        run: |
+          cd projects/output_files || exit 0
+          echo "================= FITTER SUMMARY ================="
+          cat *.fit.summary 2>/dev/null || echo "(no fit.summary)"
+          echo ""
+          echo "================= MAP / SYNTH SUMMARY ============"
+          cat *.map.summary 2>/dev/null || echo "(no map.summary)"
+          echo ""
+          echo "================= TIMING (slack) ================="
+          # Print the slack lines from the STA report, if present
+          grep -A2 -iE "Slack|Timing Requirement|Worst-case" *.sta.rpt 2>/dev/null | head -80 \
+            || echo "(no sta.rpt)"
+
+      - name: Upload Quartus reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quartus-fit-reports
+          path: |
+            projects/output_files/*.summary
+            projects/output_files/*.rpt
+            projects/output_files/*.log
