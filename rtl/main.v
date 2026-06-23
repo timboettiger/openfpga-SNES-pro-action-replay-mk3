@@ -16,9 +16,9 @@ module main #(
     // while registers/RAM hold, so a savestate captures/restores a stopped core.
     input SS_PAUSE,
 
-    // Savestate: 65C816 register vector pass-through (SNES.vhd <-> ss_spike)
-    output [191:0] SS_REG_DO,
-    input  [191:0] SS_REG_DI,
+    // Savestate: aggregated chip register vector pass-through (SNES.vhd <-> ss_spike)
+    output [447:0] SS_REG_DO,
+    input  [447:0] SS_REG_DI,
     input          SS_REG_LOAD,
 
     input MCLK,

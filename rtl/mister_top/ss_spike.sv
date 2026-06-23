@@ -26,9 +26,9 @@
 
 module ss_spike #(
     // Register region: REG_BYTES bytes (must be a multiple of 8 so the flat space
-    // stays 8-byte aligned). 24 bytes = 192 bits covers the 65C816 architectural
-    // registers serialized so far (A/X/Y/SP/D/T/DR/P/PBR/DBR); padded.
-    parameter integer REG_BYTES = 24,
+    // stays 8-byte aligned). Holds the aggregated chip register vector from
+    // SNES.vhd: 65C816 [191:0] + SMP/SPC700 [447:192]. 56 bytes = 448 bits.
+    parameter integer REG_BYTES = 56,
     parameter integer REG_BITS  = REG_BYTES * 8
 ) (
     input  wire        clk,            // clk_sys_21_48
@@ -122,7 +122,7 @@ module ss_spike #(
   wire        in_aram    = (gbyte >= WRAM_END) && (gbyte < REG_START);  // else WRAM
   wire [16:0] local_addr = in_aram ? (gbyte[16:0] - WRAM_END[16:0])
                                    : (gbyte[16:0] - VRAM_END[16:0]);
-  wire [4:0]  reg_off    = gbyte[4:0];  // 0..REG_BYTES-1 (REG_START low bits are 0)
+  wire [5:0]  reg_off    = gbyte[5:0];  // 0..REG_BYTES-1 (REG_START low bits are 0)
 
   always @(posedge clk) begin
     prev_save <= ss_save;
@@ -239,7 +239,7 @@ module ss_spike #(
           // chip register byte: write into ss_reg_di; after the last byte pulse
           // ss_reg_load so the chips latch the whole vector (core still paused).
           ss_reg_di[reg_off*8 +: 8] <= wbuf[byte_idx*8 +: 8];
-          if (reg_off == 5'(REG_BYTES - 1)) ss_reg_load <= 1'b1;
+          if (reg_off == 6'(REG_BYTES - 1)) ss_reg_load <= 1'b1;
           st <= L_NEXT;
         end else begin
           dma_req   <= 1'b1;

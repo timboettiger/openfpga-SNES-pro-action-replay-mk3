@@ -104,9 +104,10 @@ entity SNES is
 		AUDIO_L		: out std_logic_vector(15 downto 0);
 		AUDIO_R		: out std_logic_vector(15 downto 0);
 
-		-- Savestate: 65C816 register vector (pass-through to ss_spike via main.v)
-		SS_REG_DO	: out std_logic_vector(191 downto 0);
-		SS_REG_DI	: in  std_logic_vector(191 downto 0);
+		-- Savestate: aggregated chip register vector (to ss_spike via main.v).
+		-- Layout: 65C816 [191:0] + SMP/SPC700 [447:192].
+		SS_REG_DO	: out std_logic_vector(447 downto 0);
+		SS_REG_DI	: in  std_logic_vector(447 downto 0);
 		SS_REG_LOAD	: in  std_logic
 	);
 end SNES;
@@ -153,6 +154,10 @@ architecture rtl of SNES is
 	signal SMP_CPU_DI	: std_logic_vector(7 downto 0);
 	signal SMP_EN : std_logic;
 
+	-- Savestate: per-chip register vectors, aggregated into SS_REG_DO
+	signal cpu_ss_do : std_logic_vector(191 downto 0);
+	signal smp_ss_do : std_logic_vector(255 downto 0);
+
 	signal APU_RAM_A : std_logic_vector(15 downto 0);
 	signal APU_RAM_DO	: std_logic_vector(7 downto 0);
 	signal APU_RAM_DI	: std_logic_vector(7 downto 0);
@@ -181,6 +186,9 @@ architecture rtl of SNES is
 	end component;
 
 begin
+
+	-- Savestate: aggregate the chip register vectors (65C816 low, SMP/SPC700 high)
+	SS_REG_DO <= smp_ss_do & cpu_ss_do;
 
 	-- Game Genie
 	GAMEGENIE : component CODES
@@ -243,8 +251,8 @@ begin
 		TURBO			=> TURBO,
 		DBG_CPU_EN	=> DBG_CPU_EN,
 
-		SS_REG_DO	=> SS_REG_DO,
-		SS_REG_DI	=> SS_REG_DI,
+		SS_REG_DO	=> cpu_ss_do,
+		SS_REG_DI	=> SS_REG_DI(191 downto 0),
 		SS_REG_LOAD	=> SS_REG_LOAD
 	);
 
@@ -376,7 +384,11 @@ begin
  
 		IO_ADDR		=> IO_ADDR,
 		IO_DAT  		=> IO_DAT,
-		IO_WR			=> IO_WR
+		IO_WR			=> IO_WR,
+
+		SS_REG_DO	=> smp_ss_do,
+		SS_REG_DI	=> SS_REG_DI(447 downto 192),
+		SS_REG_LOAD	=> SS_REG_LOAD
 	);
 
 	-- DSP 

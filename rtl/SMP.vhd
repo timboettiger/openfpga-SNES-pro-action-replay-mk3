@@ -27,7 +27,12 @@ entity SMP is
 		
 		IO_ADDR     	: in std_logic_vector(16 downto 0);
 		IO_DAT  			: in std_logic_vector(15 downto 0);
-		IO_WR 			: in std_logic
+		IO_WR 			: in std_logic;
+
+		-- Savestate: SMP + SPC700 register vector (256b). Layout in SS_REG_DO below.
+		SS_REG_DO		: out std_logic_vector(255 downto 0);
+		SS_REG_DI		: in  std_logic_vector(255 downto 0) := (others => '0');
+		SS_REG_LOAD		: in  std_logic := '0'
 	);
 end SMP;
 
@@ -136,6 +141,8 @@ architecture rtl of SMP is
 	signal SPC_REG_DAT : std_logic_vector(55 downto 0);
 	signal REG_SET : std_logic;
 
+	signal spc_ss_do : std_logic_vector(71 downto 0);  -- SPC700 savestate vector
+
 begin
 
 	SPC700_CE <= ENABLE and CE;
@@ -151,8 +158,13 @@ begin
 				CPUI(to_integer(unsigned(PA))) <= CPU_DI;
 			end if;
 			
-			if REG_SET = '1' then
-				CPUI(0) <= SMP_REG_DAT(23 downto 16); 
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				CPUI(0) <= SS_REG_DI(79 downto 72);
+				CPUI(1) <= SS_REG_DI(87 downto 80);
+				CPUI(2) <= SS_REG_DI(95 downto 88);
+				CPUI(3) <= SS_REG_DI(103 downto 96);
+			elsif REG_SET = '1' then
+				CPUI(0) <= SMP_REG_DAT(23 downto 16);
 				CPUI(1) <= SMP_REG_DAT(31 downto 24);
 				CPUI(2) <= SMP_REG_DAT(39 downto 32);
 				CPUI(3) <= SMP_REG_DAT(47 downto 40);
@@ -185,9 +197,24 @@ begin
 		D_OUT    	=> SPC700_D_OUT,
 		WE       	=> SPC700_R_WN,
 		
-		REG_SET	   => REG_SET, 
-		REG_DAT	   => SPC_REG_DAT
+		REG_SET	   => REG_SET,
+		REG_DAT	   => SPC_REG_DAT,
+
+		SS_DO		=> spc_ss_do,
+		SS_DI		=> SS_REG_DI(71 downto 0),
+		SS_LOAD	=> SS_REG_LOAD
 	);
+
+	-- Savestate save vector (256b): must match the SS_REG_DI load slices below.
+	SS_REG_DO <= '0' & x"00000000000000" &       -- [255:199] pad (57b)
+	             AUX(1) & AUX(0) &                -- [198:183]
+	             RAM_WRITE_EN & TIMERS_DISABLE & TIMERS_ENABLE & IPL_EN &  -- [182:179]
+	             TM_EN & TM_SPEED & CLK_SPEED &   -- [178:172]
+	             T2OUT & T1OUT & T0OUT &          -- [171:160]
+	             T2DIV & T1DIV & T0DIV &          -- [159:136]
+	             CPUO(3) & CPUO(2) & CPUO(1) & CPUO(0) &  -- [135:104]
+	             CPUI(3) & CPUI(2) & CPUI(1) & CPUI(0) &  -- [103:72]
+	             spc_ss_do;                       -- [71:0]
 	
 	
 	process(CLK, RST_N)
@@ -222,7 +249,27 @@ begin
 			TIMER_CE <= '0';
 		elsif rising_edge(CLK) then
 			TIMER_CE <= '0';
-			if REG_SET = '1' then
+			if SS_REG_LOAD = '1' then        -- savestate restore (core paused)
+				CPUO(0)        <= SS_REG_DI(111 downto 104);
+				CPUO(1)        <= SS_REG_DI(119 downto 112);
+				CPUO(2)        <= SS_REG_DI(127 downto 120);
+				CPUO(3)        <= SS_REG_DI(135 downto 128);
+				T0DIV          <= SS_REG_DI(143 downto 136);
+				T1DIV          <= SS_REG_DI(151 downto 144);
+				T2DIV          <= SS_REG_DI(159 downto 152);
+				T0OUT          <= SS_REG_DI(163 downto 160);
+				T1OUT          <= SS_REG_DI(167 downto 164);
+				T2OUT          <= SS_REG_DI(171 downto 168);
+				CLK_SPEED      <= SS_REG_DI(173 downto 172);
+				TM_SPEED       <= SS_REG_DI(175 downto 174);
+				TM_EN          <= SS_REG_DI(178 downto 176);
+				IPL_EN         <= SS_REG_DI(179);
+				TIMERS_ENABLE  <= SS_REG_DI(180);
+				TIMERS_DISABLE <= SS_REG_DI(181);
+				RAM_WRITE_EN   <= SS_REG_DI(182);
+				AUX(0)         <= SS_REG_DI(190 downto 183);
+				AUX(1)         <= SS_REG_DI(198 downto 191);
+			elsif REG_SET = '1' then
 --				TIMERS_DISABLE <= SMP_REG_DAT(0);
 --				RAM_WRITE_EN <= SMP_REG_DAT(1);
 --				TIMERS_ENABLE <= SMP_REG_DAT(3);
