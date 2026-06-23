@@ -17,9 +17,9 @@ module main #(
     input SS_PAUSE,
 
     // Savestate: aggregated chip register vector pass-through (SNES.vhd <-> ss_spike)
-    output [447:0] SS_REG_DO,
-    input  [447:0] SS_REG_DI,
-    input          SS_REG_LOAD,
+    output [1087:0] SS_REG_DO,
+    input  [1087:0] SS_REG_DI,
+    input           SS_REG_LOAD,
 
     input MCLK,
     input ACLK,

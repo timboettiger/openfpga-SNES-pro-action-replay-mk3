@@ -804,9 +804,9 @@ module MAIN_SNES (
   // ss_spike. clk_sys domain, no CDC. SNES.vhd aggregates 65C816 [191:0] +
   // SMP/SPC700 [447:192]. cpu_ss_reg_do = state out, ss_reg_di = state to load,
   // ss_reg_load = latch pulse.
-  wire [447:0] cpu_ss_reg_do;
-  wire [447:0] ss_reg_di;
-  wire         ss_reg_load;
+  wire [1087:0] cpu_ss_reg_do;
+  wire [1087:0] ss_reg_di;
+  wire          ss_reg_load;
 
   psram #(
       .CLOCK_SPEED(85.9)

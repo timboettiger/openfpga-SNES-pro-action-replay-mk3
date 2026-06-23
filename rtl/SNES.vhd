@@ -105,9 +105,9 @@ entity SNES is
 		AUDIO_R		: out std_logic_vector(15 downto 0);
 
 		-- Savestate: aggregated chip register vector (to ss_spike via main.v).
-		-- Layout: 65C816 [191:0] + SMP/SPC700 [447:192].
-		SS_REG_DO	: out std_logic_vector(447 downto 0);
-		SS_REG_DI	: in  std_logic_vector(447 downto 0);
+		-- Layout: 65C816 [191:0] + SMP/SPC700 [447:192] + PPU [1087:448].
+		SS_REG_DO	: out std_logic_vector(1087 downto 0);
+		SS_REG_DI	: in  std_logic_vector(1087 downto 0);
 		SS_REG_LOAD	: in  std_logic
 	);
 end SNES;
@@ -157,6 +157,7 @@ architecture rtl of SNES is
 	-- Savestate: per-chip register vectors, aggregated into SS_REG_DO
 	signal cpu_ss_do : std_logic_vector(191 downto 0);
 	signal smp_ss_do : std_logic_vector(255 downto 0);
+	signal ppu_ss_do : std_logic_vector(639 downto 0);
 
 	signal APU_RAM_A : std_logic_vector(15 downto 0);
 	signal APU_RAM_DO	: std_logic_vector(7 downto 0);
@@ -187,8 +188,8 @@ architecture rtl of SNES is
 
 begin
 
-	-- Savestate: aggregate the chip register vectors (65C816 low, SMP/SPC700 high)
-	SS_REG_DO <= smp_ss_do & cpu_ss_do;
+	-- Savestate: aggregate the chip register vectors (65C816 low .. PPU high)
+	SS_REG_DO <= ppu_ss_do & smp_ss_do & cpu_ss_do;
 
 	-- Game Genie
 	GAMEGENIE : component CODES
@@ -352,7 +353,11 @@ begin
 		HSYNC			=> HSYNC,
 		VSYNC			=> VSYNC,
 		
-		BG_EN			=> DBG_BG_EN
+		BG_EN			=> DBG_BG_EN,
+
+		SS_DO			=> ppu_ss_do,
+		SS_DI			=> SS_REG_DI(1087 downto 448),
+		SS_LOAD		=> SS_REG_LOAD
 	);
 
 
