@@ -53,7 +53,10 @@ module xband_modem_uart
 
   assign tx_ready     = ~tx_full;
   assign phy_tx_data  = tx_mem[tx_rptr[AW-1:0]];
-  assign phy_tx_valid = ~tx_empty;
+  // Pace the PHY side to the video-locked bit clock: assert valid only on a
+  // modem_bit_ce tick so valid and the pop condition stay consistent. The byte
+  // remains buffered in the FIFO until it is actually accepted.
+  assign phy_tx_valid = ~tx_empty & modem_bit_ce;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -64,8 +67,7 @@ module xband_modem_uart
         tx_mem[tx_wptr[AW-1:0]] <= tx_data;
         tx_wptr <= tx_wptr + 1'b1;
       end
-      // pace pops to the modem bit clock so the stream matches the real rate
-      if (phy_tx_valid && phy_tx_ready && modem_bit_ce)
+      if (phy_tx_valid && phy_tx_ready)
         tx_rptr <= tx_rptr + 1'b1;
     end
   end

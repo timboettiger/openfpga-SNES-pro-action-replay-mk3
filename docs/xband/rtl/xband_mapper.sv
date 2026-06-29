@@ -61,8 +61,8 @@ module xband_mapper
     end
   end
 
-  // SRAM flat offset (16 bits = 64 KB): {bank[1:0], 13-bit page, byte}.
-  assign sram_offset = { bank[1:0], cpu_addr[12:0], 1'b0 };
+  // SRAM flat offset (16 bits = 64 KB): {bank[2:0], 13-bit page within window}.
+  assign sram_offset = { bank[2:0], cpu_addr[12:0] };
 
   // FRED register byte offset (even-addressed; see xband_pkg).
   assign reg_offset  = off[8:0];
