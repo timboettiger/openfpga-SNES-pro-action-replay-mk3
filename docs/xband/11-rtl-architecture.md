@@ -1,0 +1,104 @@
+# 11 — RTL Architecture & ROM Embedding
+
+This page specifies how to represent XBAND as RTL inside (or alongside) this
+Pocket SNES core, and how the BIOS ROM is embedded. A **reference skeleton** that
+implements these interfaces lives in [`rtl/`](rtl/). The skeleton is a
+*specification in HDL form* — synthesizable module shells with the correct ports,
+parameters, register decode and memory blocks, and clearly-marked `TODO` bodies
+for the behaviour that still needs reverse-engineering (the modem PHY and the
+FRED patch-vector datapath). It is intentionally **not wired into the Pocket
+build** (`gateware.json` / the `*.qip` lists are untouched) so it can be lifted
+into another project — e.g. an `fxpakpro` XBAND extension — without disturbing
+this core's bitstream.
+
+## Design goals
+
+1. **Mirror the MK3 add-on pattern.** This repo already models a cartridge-slot
+   add-on chip with its own ROM, SRAM and memory-mapped registers under
+   `rtl/chip/mk3/`. XBAND is the same shape; reuse that structure
+   (mapper + io + sram + top), see [08-bios-and-roms.md](08-bios-and-roms.md).
+2. **Faithful FRED register decode.** Implement the register map from
+   [07-fred-register-map.md](07-fred-register-map.md) exactly (offsets, reset
+   values, self-test invariants).
+3. **Video-locked modem timing.** Derive the serial bit-clock from the SNES
+   video timebase (`kVCntsPerModemBit = 5`, `kLinesPerModemBit = 7`), not a free
+   baud generator — this is the defining XBAND timing constraint.
+4. **Tunnelable modem.** Abstract the modem behind a clean byte FIFO so the PHY
+   can be (a) a real Rockwell model, or (b) a serial tunnel to an external
+   bridge (ESP32 over the Pocket link port — see
+   [12-link-cable-esp32.md](12-link-cable-esp32.md)).
+5. **No proprietary binary committed.** The ROM arrives via a Pocket data slot.
+
+## Module decomposition
+
+```
+xband_top.sv            top: clocks, reset, wiring, mode select
+├── xband_mapper.sv     cartridge-address decode → {BIOS, game ROM, SRAM, FRED regs}
+├── xband_fred_regs.sv  FRED register file (control/kill/patch-vectors/LED/modem)
+├── xband_fred_patch.sv FRED patch engine: 11 vectors + zero-page/trans-addr remap
+├── xband_sram.sv       64 KB battery SRAM (dual-port: SNES side + save channel)
+├── xband_modem_uart.sv 16550-style byte interface + Tx/Rx FIFOs (PHY-agnostic)
+└── xband_modem_timing.sv  VCnt / VSync counters; video-locked bit clock
+```
+
+This maps 1:1 onto the schematic blocks in [03-schematics.md](03-schematics.md)
+(FRED, SRAM, Rockwell modem, serial) and onto the MK3 file layout
+(`mk3_mapper.sv`, `mk3_io.sv`, `mk3_sram.vhd`, `mk3_snes_top.sv`).
+
+## Memory map (SNES side, LoROM-style, to be confirmed against BIOS)
+
+| SNES address window               | Target                                |
+| --------------------------------- | ------------------------------------- |
+| `$00-$3F / $80-$BF : $8000-$FFFF` | XBAND **BIOS** (or game ROM via FRED) |
+| `$xx : $6000-$7FFF`               | XBAND **SRAM** window (banked)        |
+| FRED register window (cart space) | **FRED registers** (offsets per doc 07)|
+| pass-through                      | the **game ROM** in the top socket    |
+
+> The exact SNES decode for the retail box must be confirmed by tracing the 1 MB
+> BIOS; the table above is the LoROM-style starting point consistent with how the
+> MK3 mapper (`rtl/chip/mk3/mk3_mapper.sv`) is documented. Treat it as a
+> hypothesis to validate, not a settled fact.
+
+## ROM-embedding interface (matches `rtl/main.v` MK3 style)
+
+```systemverilog
+// Load path (driven by a core_top.sv data-slot loader):
+input         XBAND_BIOS_WE;
+input  [19:0] XBAND_BIOS_LOAD_ADDR;   // 1 MB
+input  [7:0]  XBAND_BIOS_LOAD_DIN;
+// Read-back path (mapper asserts a request, byte returns next cycle):
+output        XBAND_BIOS_READ;
+output [19:0] XBAND_BIOS_READ_ADDR;
+input  [7:0]  XBAND_BIOS_DOUT;
+// 64 KB battery SRAM save channel (independent of the SNES R/W port):
+input         XBANDSV_WR;  input  [15:0] XBANDSV_ADDR_IN;  input  [7:0] XBANDSV_DOUT;
+input         XBANDSV_RD;  input  [15:0] XBANDSV_ADDR_OUT; output [7:0] XBANDSV_DIN;
+```
+
+The BIOS bytes come from a new Pocket **data slot** (declared in the core's
+`data.json`), exactly as the MK3 BIOS uses asset slot 100; the SRAM persists via
+a new **save slot**, exactly as the MK3 cheat SRAM uses Pocket slot 11. **Nothing
+is baked into the bitstream.**
+
+## What is fully specified vs. still open
+
+| Block                  | Status in skeleton                                            |
+| ---------------------- | ------------------------------------------------------------- |
+| Register decode/offsets| **Specified** — straight from `defines.h` (doc 07)            |
+| Reset / self-test values| **Specified** — `fredtest.c` invariants (doc 07)            |
+| BIOS load/read iface   | **Specified** — mirrors MK3 (`rtl/main.v`)                    |
+| 64 KB SRAM             | **Specified** — dual-port BRAM shell                          |
+| Modem byte FIFO + AT   | **Specified** — 16550-style register interface                |
+| Modem PHY (Rockwell)   | **Open** — needs the analog/datapump model; FIFO tunnel works |
+| FRED patch datapath    | **Open** — vector compare/redirect logic stubbed (the hard part)|
+| SNES decode specifics  | **Open** — confirm against the 1 MB BIOS                      |
+
+## Verification strategy
+
+- Replay the captured `MK_PUKE` / `MK2_PUKE` byte streams (from `xbsega.go`)
+  through the modem FIFO and check the handshake/CRC path
+  ([04](04-network-protocol.md)).
+- Assert the `fredtest.c` reset invariants in a self-checking testbench (doc 07).
+- Bring up the LED port first (it has known reset value `0x7F`) — it is the
+  simplest observable FRED function and maps to the same on-screen LED OSD the
+  MK3 core already renders.
