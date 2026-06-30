@@ -19,6 +19,26 @@ package xband_pkg;
   localparam int XBAND_SRAM_ADDR_BITS = 16;          // 64 KB battery SRAM
   localparam int XBAND_SRAM_BYTES     = 1 << XBAND_SRAM_ADDR_BITS;
 
+  // ---- retail SNES decode (HiROM) -----------------------------------------
+  // Confirmed against the real 1 MB dump (docs/xband/13-rom-memory-map.md):
+  //   header @ $FFC0, mapmode 0x31 (HiROM+FastROM), romsize 0x0A (1 MB),
+  //   ramsize 0x06 (64 KB), checksum 0x1A5D verified.
+  // HiROM ROM banks: $C0-$FF full + $00-$3F/$80-$BF upper half.
+  // 64 KB SRAM is presented linearly at bank $E0 (BIOS reads $E0:0000), with
+  // the classic HiROM $20-$3F:$6000-$7FFF small window also decoded.
+  localparam logic [7:0] SRAM_BANK       = 8'hE0;    // 64 KB SRAM @ $E0:xxxx
+  localparam logic [7:0] ROM_BANK_HI_LO  = 8'hC0;    // first full-bank ROM image
+  // kRomHi swaps the 512 KB code half <-> 512 KB asset half (bit 19 of ROM addr).
+  localparam int XBAND_ROM_HALF_BIT   = XBAND_ROM_ADDR_BITS - 1; // 19
+
+  // ---- patch-vector table (per-vector entries live in SRAM) ----------------
+  // Each armed vector indexes a 2-byte little-endian target offset at
+  //   vtable_base + (vector_index * VTABLE_ENTRY_BYTES)
+  // inside the SRAM; the fetched offset joins the safe-RAM bank to form the
+  // redirect target. (Model; entry width per doc 07/09.)
+  localparam int VTABLE_ENTRY_BYTES   = 2;
+  localparam int XBAND_NUM_VECTORS    = 11;          // Vector0..VectorA
+
   // ---- FRED register byte offsets (index << 1) ----------------------------
   // control / kill
   localparam logic [8:0] REG_KILL          = 9'h000; // 0x00<<1

@@ -29,7 +29,12 @@ module xband_sram
     input  logic [7:0]           b_din,
     input  logic                 b_rd,
     input  logic [ADDR_BITS-1:0] b_raddr,
-    output logic [7:0]           b_dout
+    output logic [7:0]           b_dout,
+
+    // Port C : read-only fetch port (FRED patch-vector table walk)
+    input  logic                 c_rd,
+    input  logic [ADDR_BITS-1:0] c_raddr,
+    output logic [7:0]           c_dout
 );
 
   (* ramstyle = "M10K" *) logic [7:0] mem [0:(1<<ADDR_BITS)-1];
@@ -44,6 +49,11 @@ module xband_sram
   always_ff @(posedge clk) begin
     if (b_wr) mem[b_waddr] <= b_din;
     if (b_rd) b_dout       <= mem[b_raddr];
+  end
+
+  // Port C (read-only, 1-cycle latency)
+  always_ff @(posedge clk) begin
+    if (c_rd) c_dout <= mem[c_raddr];
   end
 
 endmodule

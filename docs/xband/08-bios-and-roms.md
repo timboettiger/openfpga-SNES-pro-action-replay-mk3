@@ -8,9 +8,23 @@
 X-Band Modem BIOS (USA).sfc   1,048,576 bytes (1 MB)   dated 1996-12-24
 ```
 
-This is the **retail SNES XBAND BIOS** dump. (Catapult's dev `defines.h` uses a
-512 KB `kRomSize = 0x80000` window with battery-SRAM/ROM substitution; the retail
-image is 1 MB.) The submodule also carries:
+This is the **retail SNES XBAND BIOS** dump. It has been verified directly (see
+[13-rom-memory-map.md](13-rom-memory-map.md) for the full reverse-engineered
+memory map); the key identity is:
+
+| Property  | Value                                                       |
+| --------- | ----------------------------------------------------------- |
+| Size      | 1,048,576 bytes (1 MB, headerless)                          |
+| CRC32     | `A8B868A0`                                                  |
+| SHA-1     | `3f56b109a05097f09fd8859205ea635453d1cb45`                 |
+| Header    | HiROM (`mapmode 0x31`), title `"XBAND VIDEOGAME MODEM"`     |
+| Checksum  | `0x1A5D` — verified (sum of all bytes; `chk ^ compl == 0xFFFF`) |
+| SRAM      | 64 KB battery-backed (`ramsize 0x06`)                       |
+
+(Catapult's dev `defines.h` uses a 512 KB `kRomSize = 0x80000` window with
+battery-SRAM/ROM substitution; the retail image is 1 MB and is internally split
+into a 512 KB code half and a 512 KB asset half — see
+[13-rom-memory-map.md](13-rom-memory-map.md) §5.) The submodule also carries:
 
 - `XBAND_Game_Patches.zip` — the surviving `.SEGA` / `.JSNES` game patches
   (see [09-game-patches.md](09-game-patches.md)).

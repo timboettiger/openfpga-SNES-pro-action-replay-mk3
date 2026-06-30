@@ -46,6 +46,7 @@ All of this is distilled from the material shipped in the
 | [10-source-tree.md](10-source-tree.md)               | A map of `catapult.tar.gz` so you can find things fast          |
 | [11-rtl-architecture.md](11-rtl-architecture.md)     | How to represent XBAND as RTL + how the ROM is embedded         |
 | [12-link-cable-esp32.md](12-link-cable-esp32.md)     | Can this core reach an ESP32 over the link port? (analysis)     |
+| [13-rom-memory-map.md](13-rom-memory-map.md)         | **Verified** memory map of the real 1 MB BIOS dump              |
 | [`rtl/`](rtl/)                                        | Reference RTL **skeleton** for the XBAND mapper/modem            |
 
 ## Three questions this folder answers

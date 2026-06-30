@@ -47,6 +47,8 @@ module xband_fred_regs
     output logic [23:0] vtable_base,
     output logic [23:0] saferam_base,
     output logic [23:0] saferam_bounds,
+    output logic [23:0] saferom_base,
+    output logic [23:0] saferom_bounds,
 
     output logic [7:0]  leds
 );
@@ -60,6 +62,7 @@ module xband_fred_regs
   logic [7:0] r_trb_lo, r_trb_hi, r_tr_mid;
   logic [7:0] r_saferam_blo, r_saferam_bhi;   // safe-RAM base
   logic [7:0] r_saferam_nlo, r_saferam_nhi;   // safe-RAM bounds (size)
+  logic [7:0] r_saferom_base, r_saferom_bnd;  // safe-ROM base/bounds (bank-granular)
   logic [7:0] r_addrstat_low;     // diagnostics read-back (no floating bits)
 
   // ---- write path ---------------------------------------------------------
@@ -83,6 +86,8 @@ module xband_fred_regs
       r_saferam_bhi  <= 8'h00;
       r_saferam_nlo  <= 8'h00;
       r_saferam_nhi  <= 8'h00;
+      r_saferom_base <= 8'h00;
+      r_saferom_bnd  <= 8'h00;
       r_addrstat_low <= RST_ADDRSTAT_LOW; // 0x00
       modem_tx_valid <= 1'b0;
       modem_tx_data  <= 8'h00;
@@ -108,6 +113,8 @@ module xband_fred_regs
           REG_SAFERAM_BHI: r_saferam_bhi <= wdata;
           REG_SAFERAM_NLO: r_saferam_nlo <= wdata;
           REG_SAFERAM_NHI: r_saferam_nhi <= wdata;
+          REG_SAFEROM_BASE: r_saferom_base <= wdata;
+          REG_SAFEROM_BND:  r_saferom_bnd  <= wdata;
           REG_TXBUFF: begin
             modem_tx_data  <= wdata;       // push to modem FIFO / tunnel
             modem_tx_valid <= 1'b1;
@@ -136,6 +143,8 @@ module xband_fred_regs
         REG_LED_DATA:     rdata = r_led_data;
         REG_LED_ENABLE:   rdata = r_led_enable;
         REG_ADDRSTAT_LOW: rdata = r_addrstat_low;
+        REG_SAFEROM_BASE: rdata = r_saferom_base;
+        REG_SAFEROM_BND:  rdata = r_saferom_bnd;
         REG_READMSTATUS1: rdata = read_mstatus1;
         REG_SERIALVCNT:   rdata = serial_vcnt;
         REG_MVSYNC_HIGH:  rdata = mvsync_high;
@@ -161,6 +170,10 @@ module xband_fred_regs
   assign vtable_base    = { 8'h00, r_vtable_hi, r_vtable_lo };
   assign saferam_base   = { 8'h00, r_saferam_bhi, r_saferam_blo };
   assign saferam_bounds = { 8'h00, r_saferam_nhi, r_saferam_nlo };
+  // Safe-ROM base/bounds are bank-granular (one byte = a 64 KB bank); see
+  // docs/xband/07-fred-register-map.md (kSafeRomBase/kSafeRomBounds).
+  assign saferom_base   = { r_saferom_base, 16'h0000 };
+  assign saferom_bounds = { r_saferom_bnd,  16'h0000 };
 
   // modem_tx_ready reflects bridge FIFO capacity; the strobe-based write model
   // above does not back-pressure the CPU, so it is observed but not gated here.

@@ -66,10 +66,16 @@ module xband_top
   logic [7:0]  control_reg, kill_reg;
   logic [7:0]  enable_lo, enable_hi;
   logic [23:0] range_base, tr_base, vtable_base, saferam_base, saferam_bounds;
+  logic [23:0] saferom_base, saferom_bounds;
 
   // patch engine result (-> mapper)
   logic        patch_redirect;
   logic [23:0] patch_redirect_addr;
+
+  // patch-engine SRAM read port (per-vector table walk)
+  logic        vtable_rd;
+  logic [XBAND_SRAM_ADDR_BITS-1:0] vtable_addr;
+  logic [7:0]  vtable_data;
 
   // FRED-side modem byte stream (regs <-> modem bridge)
   logic [7:0]  fred_tx_data, fred_rx_data;
@@ -85,6 +91,7 @@ module xband_top
       .clk(clk), .rst_n(rst_n),
       .cpu_addr(cpu_addr),
       .control_reg(control_reg), .kill_reg(kill_reg),
+      .saferom_base(saferom_base), .saferom_bounds(saferom_bounds),
       .patch_redirect(patch_redirect), .patch_redirect_addr(patch_redirect_addr),
       .sel_bios(sel_bios), .sel_game(sel_game),
       .sel_sram(sel_sram), .sel_reg(sel_reg),
@@ -99,6 +106,7 @@ module xband_top
       .range_base(range_base), .tr_base(tr_base), .vtable_base(vtable_base),
       .saferam_base(saferam_base), .saferam_bounds(saferam_bounds),
       .cpu_addr(cpu_addr), .cpu_active(cpu_active),
+      .vtable_rd(vtable_rd), .vtable_addr(vtable_addr), .vtable_data(vtable_data),
       .redirect(patch_redirect), .redirect_addr(patch_redirect_addr)
   );
 
@@ -116,6 +124,7 @@ module xband_top
       .enable_lo(enable_lo), .enable_hi(enable_hi),
       .range_base(range_base), .tr_base(tr_base), .vtable_base(vtable_base),
       .saferam_base(saferam_base), .saferam_bounds(saferam_bounds),
+      .saferom_base(saferom_base), .saferom_bounds(saferom_bounds),
       .leds(leds)
   );
 
@@ -137,7 +146,8 @@ module xband_top
       .clk(clk),
       .a_addr(sram_off), .a_wr(sel_sram & cpu_wr), .a_din(cpu_din), .a_dout(sram_rdata),
       .b_wr(sav_wr), .b_waddr(sav_addr_in), .b_din(sav_din),
-      .b_rd(sav_rd), .b_raddr(sav_addr_out), .b_dout(sav_dout)
+      .b_rd(sav_rd), .b_raddr(sav_addr_out), .b_dout(sav_dout),
+      .c_rd(vtable_rd), .c_raddr(vtable_addr), .c_dout(vtable_data)
   );
 
   // ---- video-locked modem timebase ----------------------------------------

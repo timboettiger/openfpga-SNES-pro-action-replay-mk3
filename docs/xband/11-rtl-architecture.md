@@ -7,8 +7,10 @@ implements these interfaces lives in [`rtl/`](rtl/). The skeleton is a
 parameters, register decode and memory blocks. The mapper gating, the FRED
 patch-vector datapath and the modem bridge are **implemented as behavioural
 models** of the documented register behaviour (they lint clean and pass a
-self-checking testbench); the remaining reverse-engineering work (per-vector
-table walk, exact SNES decode, analog modem PHY) is called out below. It is
+self-checking testbench); the SNES decode is now **confirmed HiROM** against the
+real 1 MB BIOS (doc 13), the per-vector table walk and safe-ROM overlay are
+modelled, and the only remaining hardware-specific work is the analog modem PHY.
+It is
 intentionally **not wired into the Pocket build** (`gateware.json` / the `*.qip`
 lists are untouched) so it can be lifted into another project — e.g. an
 `fxpakpro` XBAND extension — without disturbing this core's bitstream.
@@ -47,19 +49,25 @@ This maps 1:1 onto the schematic blocks in [03-schematics.md](03-schematics.md)
 (FRED, SRAM, Rockwell modem, serial) and onto the MK3 file layout
 (`mk3_mapper.sv`, `mk3_io.sv`, `mk3_sram.vhd`, `mk3_snes_top.sv`).
 
-## Memory map (SNES side, LoROM-style, to be confirmed against BIOS)
+## Memory map (SNES side, HiROM — confirmed against the 1 MB BIOS)
+
+The retail decode has been confirmed by reverse-engineering the real dump (see
+[13-rom-memory-map.md](13-rom-memory-map.md)): the cartridge is **HiROM**
+(`mapmode 0x31`, 1 MB, 64 KB battery SRAM, checksum-valid).
 
 | SNES address window               | Target                                |
 | --------------------------------- | ------------------------------------- |
-| `$00-$3F / $80-$BF : $8000-$FFFF` | XBAND **BIOS** (or game ROM via FRED) |
-| `$xx : $6000-$7FFF`               | XBAND **SRAM** window (banked)        |
+| `$C0-$FF : $0000-$FFFF`           | XBAND **BIOS** (HiROM, 1 MB mirrored) |
+| `$00-$3F / $80-$BF : $8000-$FFFF` | XBAND **BIOS** upper-half (or game ROM via FRED) |
+| `$E0 : $0000-$FFFF`               | XBAND **SRAM** (64 KB linear)         |
+| `$20-$3F : $6000-$7FFF`           | XBAND **SRAM** small window           |
 | FRED register window (cart space) | **FRED registers** (offsets per doc 07)|
 | pass-through                      | the **game ROM** in the top socket    |
 
-> The exact SNES decode for the retail box must be confirmed by tracing the 1 MB
-> BIOS; the table above is the LoROM-style starting point consistent with how the
-> MK3 mapper (`rtl/chip/mk3/mk3_mapper.sv`) is documented. Treat it as a
-> hypothesis to validate, not a settled fact.
+> Boot: emulation RESET `$FFE0` → `JML $D0:0000` → native-mode init at file 0.
+> `kRomHi` swaps the lower-512 KB **code** half ↔ the upper-512 KB **asset** half
+> of the 1 MB image. The reference mapper (`rtl/xband_mapper.sv`) implements this
+> HiROM decode.
 
 ## ROM-embedding interface (matches `rtl/main.v` MK3 style)
 
@@ -93,9 +101,9 @@ is baked into the bitstream.**
 | Modem byte FIFO + AT   | **Specified** — 16550-style register interface                |
 | Mapper BIOS/game gating| **Implemented** — `kHereAssert`/`kRomHi` + patch redirect     |
 | Modem PHY (Rockwell)   | **Implemented as bridge** — paced byte tunnel; analog pump external |
-| FRED patch datapath    | **Implemented (model)** — range/zero-page remap, enables, safe-RAM bounds |
-| SNES decode specifics  | **Open** — confirm against the 1 MB BIOS                      |
-| Per-vector table walk  | **Open** — vtable entries live in SRAM; not yet modelled      |
+| FRED patch datapath    | **Implemented (model)** — range/zero-page remap, enables, safe-RAM bounds, per-vector table walk + safe-ROM |
+| SNES decode specifics  | **Confirmed** — HiROM, validated against the 1 MB BIOS (doc 13) |
+| Per-vector table walk  | **Implemented (model)** — vtable entries fetched from SRAM      |
 
 ## Verification strategy
 
