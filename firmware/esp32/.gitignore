@@ -1,0 +1,9 @@
+# build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+*.o
+*.elf
+*.bin
+# local secrets (never commit Wi-Fi credentials)
+include/secrets.h
