@@ -1,0 +1,20 @@
+services:
+  xband-server:
+    build: .
+    image: xband-server:latest
+    container_name: xband-server
+    restart: unless-stopped
+    ports:
+      - "7654:7654"
+    environment:
+      # TCP listen address inside the container.
+      XBAND_LISTEN: ":7654"
+    healthcheck:
+      # The distroless image has no shell; probe the port from the host instead
+      # via `docker compose ps`. This TCP check uses the built-in test of the
+      # server process being up (it exits non-zero only on bind failure).
+      test: ["CMD", "/xbandserver", "-healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
