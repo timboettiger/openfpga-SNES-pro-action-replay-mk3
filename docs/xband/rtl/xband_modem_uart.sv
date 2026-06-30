@@ -1,5 +1,5 @@
 //----------------------------------------------------------------------------
-// xband_modem_uart.sv -- byte-stream modem bridge (reference skeleton).
+// xband_modem_uart.sv -- byte-stream modem bridge (behavioural model).
 //
 // The retail XBAND used a Rockwell V.32bis modem behind FRED. For an FPGA core
 // the analog PHY is replaced by a byte tunnel: FRED's Tx/Rx FIFOs are exposed as
@@ -7,12 +7,14 @@
 // (to an ESP32 running the XBAND server protocol over Wi-Fi). See
 // docs/xband/12-link-cable-esp32.md.
 //
-// This module provides the FIFO buffering between the FRED register file and the
-// external tunnel. The modem_bit_ce input lets a future implementation pace the
-// stream to the authentic 2400-baud-derived rate; the skeleton passes bytes
-// through as soon as the tunnel accepts them.
-//
-// Reference skeleton -- NOT wired into the Pocket build.
+// This module is the modem bridge: it provides the Tx/Rx FIFO buffering between
+// the FRED register file and the external tunnel, and paces *both* directions to
+// the video-locked modem bit rate (modem_bit_ce). That reproduces the authentic
+// ~2400-baud-derived cadence (kVCntsPerModemBit = 5, kLinesPerModemBit = 7; see
+// docs/xband/07-fred-register-map.md) without modelling the Rockwell analog data
+// pump, which is intentionally out of scope -- the line side is the external
+// bridge. Occupancy/ready status is exported so the FRED status registers can
+// reflect FIFO state.
 //----------------------------------------------------------------------------
 `default_nettype none
 
@@ -40,7 +42,11 @@ module xband_modem_uart
     input  logic       phy_tx_ready,
     input  logic [7:0] phy_rx_data,
     input  logic       phy_rx_valid,
-    output logic       phy_rx_ready
+    output logic       phy_rx_ready,
+
+    // status (to FRED modem-status registers)
+    output logic       tx_fifo_empty,
+    output logic       rx_fifo_empty
 );
 
   localparam int AW = $clog2(FIFO_DEPTH);
@@ -78,7 +84,10 @@ module xband_modem_uart
   wire rx_empty = (rx_wptr == rx_rptr);
   wire rx_full  = (rx_wptr[AW-1:0] == rx_rptr[AW-1:0]) && (rx_wptr[AW] != rx_rptr[AW]);
 
-  assign phy_rx_ready = ~rx_full;
+  // Accept bytes from the tunnel only on a modem_bit_ce tick so the receive
+  // side runs at the same video-locked cadence as transmit; the external bridge
+  // holds phy_rx_valid until the byte is taken.
+  assign phy_rx_ready = ~rx_full & modem_bit_ce;
   assign rx_data      = rx_mem[rx_rptr[AW-1:0]];
   assign rx_valid     = ~rx_empty;
 
@@ -95,6 +104,10 @@ module xband_modem_uart
         rx_rptr <= rx_rptr + 1'b1;
     end
   end
+
+  // ---- status -------------------------------------------------------------
+  assign tx_fifo_empty = tx_empty;
+  assign rx_fifo_empty = rx_empty;
 
 endmodule
 

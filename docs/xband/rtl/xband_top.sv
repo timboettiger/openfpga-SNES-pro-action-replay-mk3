@@ -62,14 +62,44 @@ module xband_top
   logic [7:0]  serial_vcnt, mvsync_high;
   logic        modem_bit_ce;
 
+  // FRED control/kill + patch programming (regs -> mapper / patch engine)
+  logic [7:0]  control_reg, kill_reg;
+  logic [7:0]  enable_lo, enable_hi;
+  logic [23:0] range_base, tr_base, vtable_base, saferam_base, saferam_bounds;
+
+  // patch engine result (-> mapper)
+  logic        patch_redirect;
+  logic [23:0] patch_redirect_addr;
+
+  // FRED-side modem byte stream (regs <-> modem bridge)
+  logic [7:0]  fred_tx_data, fred_rx_data;
+  logic        fred_tx_valid, fred_tx_ready;
+  logic        fred_rx_valid, fred_rx_ready;
+  logic        tx_fifo_empty, rx_fifo_empty;
+
+  // The CPU bus is "active" for the patch engine whenever the SNES reads/writes.
+  wire         cpu_active = cpu_rd | cpu_wr;
+
   // ---- address decode -----------------------------------------------------
   xband_mapper u_mapper (
       .clk(clk), .rst_n(rst_n),
       .cpu_addr(cpu_addr),
+      .control_reg(control_reg), .kill_reg(kill_reg),
+      .patch_redirect(patch_redirect), .patch_redirect_addr(patch_redirect_addr),
       .sel_bios(sel_bios), .sel_game(sel_game),
       .sel_sram(sel_sram), .sel_reg(sel_reg),
       .sram_offset(sram_off), .reg_offset(reg_off),
       .bios_read(bios_read), .bios_read_addr(bios_read_addr)
+  );
+
+  // ---- FRED patch engine --------------------------------------------------
+  xband_fred_patch u_patch (
+      .clk(clk), .rst_n(rst_n),
+      .enable_lo(enable_lo), .enable_hi(enable_hi),
+      .range_base(range_base), .tr_base(tr_base), .vtable_base(vtable_base),
+      .saferam_base(saferam_base), .saferam_bounds(saferam_bounds),
+      .cpu_addr(cpu_addr), .cpu_active(cpu_active),
+      .redirect(patch_redirect), .redirect_addr(patch_redirect_addr)
   );
 
   // ---- FRED register file -------------------------------------------------
@@ -78,11 +108,28 @@ module xband_top
       .sel(sel_reg), .offset(reg_off),
       .wr(cpu_wr), .wdata(cpu_din), .rdata(reg_rdata),
       .serial_vcnt(serial_vcnt), .mvsync_high(mvsync_high),
-      .modem_tx_data(modem_tx_data), .modem_tx_valid(modem_tx_valid),
-      .modem_tx_ready(modem_tx_ready),
-      .modem_rx_data(modem_rx_data), .modem_rx_valid(modem_rx_valid),
-      .modem_rx_ready(modem_rx_ready),
+      .modem_tx_data(fred_tx_data), .modem_tx_valid(fred_tx_valid),
+      .modem_tx_ready(fred_tx_ready),
+      .modem_rx_data(fred_rx_data), .modem_rx_valid(fred_rx_valid),
+      .modem_rx_ready(fred_rx_ready),
+      .control_reg(control_reg), .kill_reg(kill_reg),
+      .enable_lo(enable_lo), .enable_hi(enable_hi),
+      .range_base(range_base), .tr_base(tr_base), .vtable_base(vtable_base),
+      .saferam_base(saferam_base), .saferam_bounds(saferam_bounds),
       .leds(leds)
+  );
+
+  // ---- modem bridge : FRED FIFOs <-> external tunnel (paced) ---------------
+  xband_modem_uart u_modem (
+      .clk(clk), .rst_n(rst_n),
+      .modem_bit_ce(modem_bit_ce),
+      .tx_data(fred_tx_data), .tx_valid(fred_tx_valid), .tx_ready(fred_tx_ready),
+      .rx_data(fred_rx_data), .rx_valid(fred_rx_valid), .rx_ready(fred_rx_ready),
+      .phy_tx_data(modem_tx_data), .phy_tx_valid(modem_tx_valid),
+      .phy_tx_ready(modem_tx_ready),
+      .phy_rx_data(modem_rx_data), .phy_rx_valid(modem_rx_valid),
+      .phy_rx_ready(modem_rx_ready),
+      .tx_fifo_empty(tx_fifo_empty), .rx_fifo_empty(rx_fifo_empty)
   );
 
   // ---- 64 KB battery SRAM (dual port: SNES side + save channel) -----------
@@ -115,7 +162,7 @@ module xband_top
   // bios_we/bios_load_* are consumed by the top-level data-slot bridge.
   // (Left visible here so the interface matches docs/xband/08-bios-and-roms.md.)
   wire _unused_ok = &{1'b0, bios_we, bios_load_addr, bios_load_din,
-                      sel_game, modem_bit_ce};
+                      sel_game, tx_fifo_empty, rx_fifo_empty};
 
 endmodule
 

@@ -35,6 +35,19 @@ module xband_fred_regs
     input  logic        modem_rx_valid,
     output logic        modem_rx_ready,
 
+    // FRED control/kill state (to xband_mapper)
+    output logic [7:0]  control_reg,
+    output logic [7:0]  kill_reg,
+
+    // patch-engine programming (to xband_fred_patch)
+    output logic [7:0]  enable_lo,
+    output logic [7:0]  enable_hi,
+    output logic [23:0] range_base,
+    output logic [23:0] tr_base,
+    output logic [23:0] vtable_base,
+    output logic [23:0] saferam_base,
+    output logic [23:0] saferam_bounds,
+
     output logic [7:0]  leds
 );
 
@@ -45,6 +58,8 @@ module xband_fred_regs
   logic [7:0] r_vtable_lo, r_vtable_hi;
   logic [7:0] r_range_lo, r_range_mid, r_range_hi;
   logic [7:0] r_trb_lo, r_trb_hi, r_tr_mid;
+  logic [7:0] r_saferam_blo, r_saferam_bhi;   // safe-RAM base
+  logic [7:0] r_saferam_nlo, r_saferam_nhi;   // safe-RAM bounds (size)
   logic [7:0] r_addrstat_low;     // diagnostics read-back (no floating bits)
 
   // ---- write path ---------------------------------------------------------
@@ -64,6 +79,10 @@ module xband_fred_regs
       r_trb_lo       <= 8'h00;
       r_trb_hi       <= 8'h00;
       r_tr_mid       <= 8'h00;
+      r_saferam_blo  <= 8'h00;
+      r_saferam_bhi  <= 8'h00;
+      r_saferam_nlo  <= 8'h00;
+      r_saferam_nhi  <= 8'h00;
       r_addrstat_low <= RST_ADDRSTAT_LOW; // 0x00
       modem_tx_valid <= 1'b0;
       modem_tx_data  <= 8'h00;
@@ -85,6 +104,10 @@ module xband_fred_regs
           REG_TRB_LOW:     r_trb_lo     <= wdata;
           REG_TRB_HIGH:    r_trb_hi     <= wdata;
           REG_TR_MID:      r_tr_mid     <= wdata;
+          REG_SAFERAM_BLO: r_saferam_blo <= wdata;
+          REG_SAFERAM_BHI: r_saferam_bhi <= wdata;
+          REG_SAFERAM_NLO: r_saferam_nlo <= wdata;
+          REG_SAFERAM_NHI: r_saferam_nhi <= wdata;
           REG_TXBUFF: begin
             modem_tx_data  <= wdata;       // push to modem FIFO / tunnel
             modem_tx_valid <= 1'b1;
@@ -127,6 +150,21 @@ module xband_fred_regs
 
   // Front-panel LEDs reflect r_led_data masked by output-enables.
   assign leds = r_led_data & r_led_enable;
+
+  // ---- exported state for the mapper and the patch engine -----------------
+  assign control_reg    = r_control;
+  assign kill_reg       = r_kill;
+  assign enable_lo      = r_enable_lo;
+  assign enable_hi      = r_enable_hi;
+  assign range_base     = { r_range_hi, r_range_mid, r_range_lo };
+  assign tr_base        = { r_trb_hi,   r_tr_mid,    r_trb_lo   };
+  assign vtable_base    = { 8'h00, r_vtable_hi, r_vtable_lo };
+  assign saferam_base   = { 8'h00, r_saferam_bhi, r_saferam_blo };
+  assign saferam_bounds = { 8'h00, r_saferam_nhi, r_saferam_nlo };
+
+  // modem_tx_ready reflects bridge FIFO capacity; the strobe-based write model
+  // above does not back-pressure the CPU, so it is observed but not gated here.
+  wire _unused_ok = &{1'b0, modem_tx_ready};
 
 endmodule
 

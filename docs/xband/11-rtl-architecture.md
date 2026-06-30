@@ -4,12 +4,14 @@ This page specifies how to represent XBAND as RTL inside (or alongside) this
 Pocket SNES core, and how the BIOS ROM is embedded. A **reference skeleton** that
 implements these interfaces lives in [`rtl/`](rtl/). The skeleton is a
 *specification in HDL form* — synthesizable module shells with the correct ports,
-parameters, register decode and memory blocks, and clearly-marked `TODO` bodies
-for the behaviour that still needs reverse-engineering (the modem PHY and the
-FRED patch-vector datapath). It is intentionally **not wired into the Pocket
-build** (`gateware.json` / the `*.qip` lists are untouched) so it can be lifted
-into another project — e.g. an `fxpakpro` XBAND extension — without disturbing
-this core's bitstream.
+parameters, register decode and memory blocks. The mapper gating, the FRED
+patch-vector datapath and the modem bridge are **implemented as behavioural
+models** of the documented register behaviour (they lint clean and pass a
+self-checking testbench); the remaining reverse-engineering work (per-vector
+table walk, exact SNES decode, analog modem PHY) is called out below. It is
+intentionally **not wired into the Pocket build** (`gateware.json` / the `*.qip`
+lists are untouched) so it can be lifted into another project — e.g. an
+`fxpakpro` XBAND extension — without disturbing this core's bitstream.
 
 ## Design goals
 
@@ -89,9 +91,11 @@ is baked into the bitstream.**
 | BIOS load/read iface   | **Specified** — mirrors MK3 (`rtl/main.v`)                    |
 | 64 KB SRAM             | **Specified** — dual-port BRAM shell                          |
 | Modem byte FIFO + AT   | **Specified** — 16550-style register interface                |
-| Modem PHY (Rockwell)   | **Open** — needs the analog/datapump model; FIFO tunnel works |
-| FRED patch datapath    | **Open** — vector compare/redirect logic stubbed (the hard part)|
+| Mapper BIOS/game gating| **Implemented** — `kHereAssert`/`kRomHi` + patch redirect     |
+| Modem PHY (Rockwell)   | **Implemented as bridge** — paced byte tunnel; analog pump external |
+| FRED patch datapath    | **Implemented (model)** — range/zero-page remap, enables, safe-RAM bounds |
 | SNES decode specifics  | **Open** — confirm against the 1 MB BIOS                      |
+| Per-vector table walk  | **Open** — vtable entries live in SRAM; not yet modelled      |
 
 ## Verification strategy
 
